@@ -14,13 +14,16 @@ export default async function handler(req: any, res: any) {
   try {
     const user = await withDb(async (client) => {
       const result = await client.query(
-        'SELECT id, email, name, password_hash FROM users WHERE email = $1',
+        'SELECT id, email, name, password_hash, disabled FROM users WHERE email = $1',
         [email]
       );
       return result.rows[0] || null;
     });
     if (!user || !user.password_hash || user.password_hash !== hashPassword(password)) {
       return res.status(401).json({ error: 'No account matches that email and password. Create an account first.' });
+    }
+    if (user.disabled) {
+      return res.status(403).json({ error: 'This account has been disabled by an administrator.' });
     }
     return res.status(200).json({ ok: true, user: { id: user.id, email: user.email, name: user.name } });
   } catch (err: any) {
