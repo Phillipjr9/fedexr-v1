@@ -1,5 +1,5 @@
 /** AEM template: Home Page */
-import { useMemo } from 'react';
+import { useEffect, useState } from 'react';
 import AlertBanner from '@/components/AlertBanner';
 import HeroSection from '@/sections/HeroSection';
 import WhyShipSection from '@/sections/WhyShipSection';
@@ -11,17 +11,31 @@ import BusinessAdvantageSection from '@/sections/BusinessAdvantageSection';
 import SustainabilitySection from '@/sections/SustainabilitySection';
 import RewardsSection from '@/sections/RewardsSection';
 import NoticesSection from '@/sections/NoticesSection';
-import { getBanner } from '@/lib/adminStore';
+import { apiGetBanner } from '@/lib/adminApi';
 
 export default function HomePage() {
-  const banner = useMemo(() => getBanner(), []);
+  const [banner, setBanner] = useState({
+    enabled: true,
+    message: 'US Supreme Court Tariff Update.',
+    linkText: 'See how this may impact you',
+    linkHref: '/support/tariffs',
+  });
+
+  useEffect(() => {
+    apiGetBanner()
+      .then((b) => setBanner(b))
+      .catch(() => {});
+  }, []);
+
   return (
     <>
       <HeroSection />
-      {banner.enabled && banner.message ? (
-        <AlertBanner message={banner.message} linkText={banner.linkText || 'Learn more'} linkHref={banner.linkHref || '/support'} />
-      ) : (
-        <AlertBanner message="US Supreme Court Tariff Update." linkText="See how this may impact you" linkHref="/support/tariffs" />
+      {banner.enabled && banner.message && (
+        <AlertBanner
+          message={banner.message}
+          linkText={banner.linkText || 'Learn more'}
+          linkHref={banner.linkHref || '/support'}
+        />
       )}
       <WhyShipSection />
       <DeliveryOptionsSection />
