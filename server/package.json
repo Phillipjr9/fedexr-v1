@@ -1,0 +1,8 @@
+{
+  "name": "server",
+  "version": "0.0.0",
+  "private": true,
+  "description": "Placeholder so Vercel install --prefix server succeeds",
+  "scripts": { "build": "echo no server build" },
+  "dependencies": {}
+}
