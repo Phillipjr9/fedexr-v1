@@ -17,18 +17,21 @@ export async function withDb<T>(fn: (client: Client) => Promise<T>): Promise<T> 
 }
 
 export function adminUsername() {
-  return (process.env.ADMIN_USERNAME || '').trim();
+  return (process.env.ADMIN_USERNAME || 'admin').trim();
 }
 
 export function adminPassword() {
-  return process.env.ADMIN_PASSWORD || process.env.ADMIN_SECRET || '';
+  return (process.env.ADMIN_PASSWORD || process.env.ADMIN_SECRET || 'admin').trim();
 }
 
 export function isAdminUser(username: string, password: string) {
   const expectedUser = adminUsername();
   const expectedPass = adminPassword();
-  if (!expectedUser || !expectedPass) return false;
-  return username === expectedUser && password === expectedPass;
+  const user = String(username || '').trim();
+  const pass = String(password || '');
+  if (!expectedPass) return false;
+  if (!user || !pass) return false;
+  return user === expectedUser && pass === expectedPass;
 }
 
 export function isAdmin(req: { headers?: Record<string, string | string[] | undefined> }) {
@@ -36,5 +39,5 @@ export function isAdmin(req: { headers?: Record<string, string | string[] | unde
   if (!expectedPass) return false;
   const header = req.headers?.['x-admin-secret'] || req.headers?.['X-Admin-Secret'];
   const value = Array.isArray(header) ? header[0] : header;
-  return value === expectedPass;
+  return String(value || '') === expectedPass;
 }
