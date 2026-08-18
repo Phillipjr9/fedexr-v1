@@ -40,7 +40,7 @@ function PublicShell() {
   return (
     <div className="min-h-screen bg-white flex flex-col">
       <Header />
-      <main className="pt-[72px] flex-1">
+      <main className="pt-16 md:pt-[6.5rem] flex-1">
         <Routes>
           <Route path="/" element={<HomePage />} />
           <Route path="/shipping" element={<ShippingPage />} />
