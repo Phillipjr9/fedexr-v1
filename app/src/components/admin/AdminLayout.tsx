@@ -10,12 +10,14 @@ import {
   Activity,
   MapPin,
   BarChart3,
+  PauseCircle,
 } from 'lucide-react';
 import { isAdminLoggedIn, logoutAdmin } from '@/lib/adminStore';
 
 const links = [
   { to: '/admin/dashboard', label: 'Overview', icon: LayoutDashboard },
   { to: '/admin/shipments', label: 'Shipments', icon: Package },
+  { to: '/admin/holds', label: 'Holds', icon: PauseCircle },
   { to: '/admin/users', label: 'Users', icon: Users },
   { to: '/admin/locations', label: 'Locations', icon: MapPin },
   { to: '/admin/banner', label: 'Banner', icon: Megaphone },
