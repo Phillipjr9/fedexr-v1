@@ -1,5 +1,5 @@
 import { useState } from 'react';
-import { useNavigate } from 'react-router-dom';
+import { Link, useNavigate } from 'react-router-dom';
 import { Input } from '@/components/ui/input';
 import { Button } from '@/components/ui/button';
 import { toast } from 'sonner';
@@ -13,7 +13,7 @@ export default function AdminLogin() {
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!username.trim() || !password) {
-      toast.error('Enter username and password');
+      toast.error('Enter staff username and password');
       return;
     }
     setBusy(true);
@@ -25,40 +25,42 @@ export default function AdminLogin() {
       });
       const json = await res.json().catch(() => ({}));
       if (!res.ok || !json.ok) {
-        toast.error(json.error || 'Incorrect username or password');
+        toast.error(json.error || 'Incorrect staff username or password');
         return;
       }
       localStorage.setItem('isAdmin', 'true');
       localStorage.setItem('adminUsername', json.username);
       localStorage.setItem('adminPassword', json.secret);
-      toast.success('Admin signed in');
+      toast.success('Staff signed in');
       navigate('/admin/dashboard');
     } catch {
-      toast.error('Could not reach the login API. Set ADMIN_USERNAME and ADMIN_PASSWORD in env.');
+      toast.error('Could not reach admin login');
     } finally {
       setBusy(false);
     }
   };
 
   return (
-    <div className="min-h-screen bg-[#f3f3f3] flex items-center justify-center py-12 px-4">
+    <div className="min-h-screen bg-[#1a1030] flex items-center justify-center py-12 px-4">
       <div className="max-w-md w-full bg-white p-8 rounded-lg shadow">
-        <p className="text-2xl font-bold mb-1">Fed<span className="text-[#FF6600]">Ex</span></p>
-        <h1 className="text-xl font-semibold mb-2">Admin sign in</h1>
-        <p className="text-sm text-gray-600 mb-6">Staff only. Credentials come from server env.</p>
+        <p className="text-xs uppercase tracking-widest text-[#4D148C] mb-2">Staff only</p>
+        <p className="text-2xl font-bold mb-1">Fed<span className="text-[#FF6600]">Ex</span> Admin</p>
+        <h1 className="text-xl font-semibold mb-2">Operations sign in</h1>
+        <p className="text-sm text-gray-600 mb-6">This is not the customer login. Use the username and password from server env.</p>
         <form onSubmit={handleSubmit} className="space-y-4" autoComplete="off">
           <div>
-            <label className="block text-sm font-medium text-gray-700 mb-1">Username</label>
-            <Input value={username} onChange={(e) => setUsername(e.target.value)} autoComplete="username" />
+            <label className="block text-sm font-medium text-gray-700 mb-1">Staff username</label>
+            <Input value={username} onChange={(e) => setUsername(e.target.value)} autoComplete="off" />
           </div>
           <div>
-            <label className="block text-sm font-medium text-gray-700 mb-1">Password</label>
-            <Input type="password" autoComplete="current-password" value={password} onChange={(e) => setPassword(e.target.value)} />
+            <label className="block text-sm font-medium text-gray-700 mb-1">Staff password</label>
+            <Input type="password" autoComplete="off" value={password} onChange={(e) => setPassword(e.target.value)} />
           </div>
           <Button type="submit" disabled={busy} className="w-full bg-[#4D148C] hover:bg-[#3A1070] text-white">
-            {busy ? 'Signing in…' : 'Sign in'}
+            {busy ? 'Signing in…' : 'Staff sign in'}
           </Button>
         </form>
+        <p className="text-sm text-gray-500 mt-6 text-center">Customer? <Link to="/login" className="text-[#007AB8] underline">Sign in here</Link></p>
       </div>
     </div>
   );
