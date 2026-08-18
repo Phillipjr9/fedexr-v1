@@ -1,0 +1,17 @@
+{
+  "nav": {
+    "home": "Startseite",
+    "shipping": "Versand",
+    "create_shipment": "Sendung erstellen",
+    "tracking": "Sendungsverfolgung",
+    "design_print": "Design & Druck",
+    "locations": "Standorte",
+    "support": "Support"
+  },
+  "shipment": {
+    "title": "Sendung erstellen",
+    "image_upload": "Bild der Waren",
+    "choose_image": "Bild auswählen",
+    "no_file": "Keine Datei ausgewählt"
+  }
+}

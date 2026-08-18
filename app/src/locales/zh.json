@@ -1,0 +1,17 @@
+{
+  "nav": {
+    "home": "首页",
+    "shipping": "运输",
+    "create_shipment": "创建货件",
+    "tracking": "追踪",
+    "design_print": "设计与印刷",
+    "locations": "网点",
+    "support": "支持"
+  },
+  "shipment": {
+    "title": "创建货件",
+    "image_upload": "物品图片",
+    "choose_image": "选择图片",
+    "no_file": "未选择文件"
+  }
+}

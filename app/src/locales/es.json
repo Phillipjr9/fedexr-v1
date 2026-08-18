@@ -1,0 +1,17 @@
+{
+  "nav": {
+    "home": "Inicio",
+    "shipping": "Envíos",
+    "create_shipment": "Crear envío",
+    "tracking": "Rastreo",
+    "design_print": "Diseño e impresión",
+    "locations": "Ubicaciones",
+    "support": "Soporte"
+  },
+  "shipment": {
+    "title": "Crear un envío",
+    "image_upload": "Imagen de los artículos",
+    "choose_image": "Elegir imagen",
+    "no_file": "Ningún archivo seleccionado"
+  }
+}
