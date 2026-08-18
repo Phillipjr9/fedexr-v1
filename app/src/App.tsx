@@ -1,7 +1,6 @@
 import { BrowserRouter as Router, Routes, Route, useLocation } from 'react-router-dom';
 import './i18n';
 import { Toaster } from 'sonner';
-import { useTranslation } from 'react-i18next';
 import Header from '@/components/Header';
 import Footer from '@/components/Footer';
 import LiveChat from '@/components/chat/LiveChat';
@@ -32,18 +31,6 @@ import PickupPage from '@/pages/PickupPage';
 import ForgotPasswordPage from '@/pages/ForgotPasswordPage';
 import './App.css';
 
-function CreateShipmentPage() {
-  const { t } = useTranslation();
-  return (
-    <div className="min-h-screen bg-[#f7f7f7] py-12">
-      <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
-        <h1 className="text-3xl font-semibold text-gray-900 mb-8 text-center">{t('shipment.title')}</h1>
-        <ShipmentWizard />
-      </div>
-    </div>
-  );
-}
-
 function PublicShell() {
   return (
     <div className="min-h-screen bg-white flex flex-col">
@@ -52,7 +39,7 @@ function PublicShell() {
         <Routes>
           <Route path="/" element={<HomePage />} />
           <Route path="/shipping" element={<ShippingPage />} />
-          <Route path="/shipping/create" element={<CreateShipmentPage />} />
+          <Route path="/shipping/create" element={<ShipmentWizard />} />
           <Route path="/shipping/pickup" element={<PickupPage />} />
           <Route path="/tracking" element={<TrackingPage />} />
           <Route path="/tracking/multiple" element={<TrackMultiplePage />} />
@@ -91,8 +78,7 @@ function PublicShell() {
 
 function AppRoutes() {
   const location = useLocation();
-  const isAdmin = location.pathname.startsWith('/admin');
-  if (isAdmin) {
+  if (location.pathname.startsWith('/admin')) {
     return (
       <Routes>
         <Route path="/admin" element={<AdminLogin />} />
