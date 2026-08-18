@@ -76,31 +76,25 @@ export default function TrackingPage() {
 
     setIsTracking(true);
     
-    // Simulate API call
-    setTimeout(() => {
-      const result = {
-        number: trackingNumber,
-        status: 'Delivered',
-        estimatedDelivery: 'Delivered on Apr 2, 2026',
-        history: mockTrackingHistory,
-      };
-      setTrackingResult(result);
-
-      // fetch image from serverless API (Neon)
-      (async () => {
-        try {
-          const r = await fetch(`/api/get-tracking-image?number=${encodeURIComponent(trackingNumber)}`);
-          if (r.ok) {
-            const j = await r.json();
-            if (j.found && j.dataUrl) setTrackingImage(j.dataUrl);
-          }
-        } catch (err) {
-          // ignore
-        } finally {
-          setIsTracking(false);
+    (async () => {
+      try {
+        const number = trackingNumber.trim();
+        const trackRes = await fetch(`/api/track?number=${encodeURIComponent(number)}`);
+        const trackJson = await trackRes.json().catch(() => ({}));
+        if (trackRes.ok && (trackJson.status || trackJson.found)) {
+          setTrackingResult({ number, status: trackJson.status || 'In transit', estimatedDelivery: trackJson.estimatedDelivery || '', history: trackJson.history || [] });
+        } else {
+          const adminRes = await fetch(`/api/admin/shipments?number=${encodeURIComponent(number)}`);
+          const adminJson = await adminRes.json().catch(() => ({}));
+          const shipment = adminJson.shipments?.[0];
+          if (shipment) setTrackingResult({ number: shipment.number, status: shipment.status, estimatedDelivery: shipment.estimatedDelivery || '', history: shipment.history || [] });
+          else { toast.error('No information found for that tracking number'); setTrackingResult(null); }
         }
-      })();
-    }, 1500);
+        const img = await fetch(`/api/get-tracking-image?number=${encodeURIComponent(number)}&event=setup`);
+        if (img.ok) { const j = await img.json(); if (j.found && j.dataUrl) setTrackingImage(j.dataUrl); }
+      } catch { toast.error('Unable to track right now'); setTrackingResult(null); }
+      finally { setIsTracking(false); }
+    })();
   };
 
   return (

@@ -3,7 +3,8 @@ import { motion } from 'framer-motion';
 import { Eye, EyeOff, Lock, Mail, User, CheckCircle, ChevronRight, Truck, Gift, CreditCard } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
-import { Link } from 'react-router-dom';
+import { Link, useNavigate, useSearchParams } from 'react-router-dom';
+import { toast } from 'sonner';
 import FadeInOnScroll from '@/components/animations/FadeInOnScroll';
 
 const benefits = [
@@ -32,13 +33,24 @@ export default function LoginPage() {
   const [firstName, setFirstName] = useState('');
   const [lastName, setLastName] = useState('');
 
-  const handleSubmit = (e: React.FormEvent) => {
+  const [busy, setBusy] = useState(false);
+  const navigate = useNavigate();
+  const [params] = useSearchParams();
+  const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (isLogin) {
-      alert(`Logging in with: ${email}`);
-    } else {
-      alert(`Creating account for: ${firstName} ${lastName}`);
-    }
+    if (!email.trim() || !password.trim()) { toast.error('Enter email and password'); return; }
+    if (!isLogin && (!firstName.trim() || !lastName.trim())) { toast.error('Enter your first and last name'); return; }
+    setBusy(true);
+    try {
+      const path = isLogin ? '/api/auth/login' : '/api/auth/register';
+      const res = await fetch(path, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ email: email.trim(), password, name: `${firstName} ${lastName}`.trim() }) });
+      const json = await res.json().catch(() => ({}));
+      if (!res.ok) { toast.error(json.error || 'Could not sign in'); return; }
+      sessionStorage.setItem('fx_user', JSON.stringify(json.user));
+      toast.success(isLogin ? 'Signed in' : 'Account created');
+      navigate(params.get('next') || '/dashboard');
+    } catch { toast.error('Could not reach the account service'); }
+    finally { setBusy(false); }
   };
 
   return (
