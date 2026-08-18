@@ -17,7 +17,7 @@ export async function withDb<T>(fn: (client: Client) => Promise<T>): Promise<T> 
 }
 
 export function adminUsername() {
-  return (process.env.ADMIN_USERNAME || 'admin').trim();
+  return (process.env.ADMIN_USERNAME || process.env.ADMIN_EMAIL || 'admin').trim();
 }
 
 export function adminPassword() {
@@ -25,11 +25,10 @@ export function adminPassword() {
 }
 
 export function isAdminUser(username: string, password: string) {
-  const expectedUser = adminUsername();
+  const expectedUser = adminUsername().toLowerCase();
   const expectedPass = adminPassword();
-  const user = String(username || '').trim();
+  const user = String(username || '').trim().toLowerCase();
   const pass = String(password || '');
-  if (!expectedPass) return false;
   if (!user || !pass) return false;
   return user === expectedUser && pass === expectedPass;
 }

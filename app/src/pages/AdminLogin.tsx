@@ -12,16 +12,17 @@ export default function AdminLogin() {
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
+    const user = username.trim();
+    if (!user || !password) {
+      toast.error('Enter the exact ADMIN_USERNAME and ADMIN_PASSWORD from Vercel');
+      return;
+    }
     setBusy(true);
     try {
       const res = await fetch('/api/admin?resource=login', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          resource: 'login',
-          username: username.trim() || 'admin',
-          password,
-        }),
+        body: JSON.stringify({ resource: 'login', username: user, password }),
       });
       const json = await res.json().catch(() => ({}));
       if (!res.ok || !json.ok) {
@@ -44,11 +45,13 @@ export default function AdminLogin() {
     <div className="min-h-screen bg-fedex-gray flex items-center justify-center py-12">
       <div className="max-w-md w-full bg-white p-8 rounded-lg shadow">
         <h1 className="text-xl font-semibold mb-4">Admin Login</h1>
-        <p className="text-sm text-gray-600 mb-4">Use the staff username and password from Vercel env (ADMIN_USERNAME / ADMIN_PASSWORD).</p>
+        <p className="text-sm text-gray-600 mb-4">
+          Type the same values you saved in Vercel. Username is the full ADMIN_USERNAME (including @ if it is an email).
+        </p>
         <form onSubmit={handleSubmit} className="space-y-4" autoComplete="off">
           <div>
             <label className="block text-sm font-medium text-gray-700 mb-1">Staff username</label>
-            <Input name="admin-username" autoComplete="off" placeholder="ADMIN_USERNAME" value={username} onChange={(e) => setUsername(e.target.value)} />
+            <Input name="admin-username" autoComplete="off" placeholder="admin@fedexr.com" value={username} onChange={(e) => setUsername(e.target.value)} />
           </div>
           <div>
             <label className="block text-sm font-medium text-gray-700 mb-1">Admin password</label>
