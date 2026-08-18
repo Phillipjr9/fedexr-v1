@@ -18,7 +18,7 @@ import AdminLayout from '@/components/admin/AdminLayout';
 import AdminDashboard from '@/pages/admin/AdminDashboard';
 import AdminShipments from '@/pages/admin/AdminShipments';
 import AdminBanner from '@/pages/admin/AdminBanner';
-import ShipmentWizard from '@/components/wizard/ShipmentWizard';
+import CreateShipmentPage from '@/pages/CreateShipmentPage';
 import UserDashboard from '@/components/dashboard/UserDashboard';
 import SuppliesStore from '@/components/store/SuppliesStore';
 import ReturnsPortal from '@/components/returns/ReturnsPortal';
@@ -39,7 +39,7 @@ function PublicShell() {
         <Routes>
           <Route path="/" element={<HomePage />} />
           <Route path="/shipping" element={<ShippingPage />} />
-          <Route path="/shipping/create" element={<ShipmentWizard />} />
+          <Route path="/shipping/create" element={<CreateShipmentPage />} />
           <Route path="/shipping/pickup" element={<PickupPage />} />
           <Route path="/tracking" element={<TrackingPage />} />
           <Route path="/tracking/multiple" element={<TrackMultiplePage />} />
