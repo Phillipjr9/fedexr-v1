@@ -3,6 +3,10 @@
   "buildCommand": "npm run build --prefix app",
   "outputDirectory": "app/dist",
   "rewrites": [
+    { "source": "/api/auth/login", "destination": "/api/auth" },
+    { "source": "/api/auth/register", "destination": "/api/auth?action=register" },
+    { "source": "/api/get-tracking-image", "destination": "/api/images" },
+    { "source": "/api/upload-tracking-image", "destination": "/api/images" },
     { "source": "/api/:path*", "destination": "/api/:path*" },
     { "source": "/(.*)", "destination": "/index.html" }
   ]
