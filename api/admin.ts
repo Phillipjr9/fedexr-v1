@@ -1,48 +1,44 @@
 import { isAdmin, isAdminUser, withDb } from './lib/db';
 import shipments from './lib/handlers/shipments';
 
-function routeName(req: any) {
-  const url = String(req.url || '');
-  const q = String(req.query?.resource || req.body?.resource || '');
-  return `${url} ${q}`;
+function parseBody(req: any) {
+  if (!req.body) return {};
+  if (typeof req.body === 'string') {
+    try { return JSON.parse(req.body); } catch { return {}; }
+  }
+  return req.body;
+}
+
+function routeName(req: any, body: any) {
+  return `${req.url || ''} ${req.query?.resource || ''} ${body?.resource || ''}`;
 }
 
 export default async function handler(req: any, res: any) {
-  const route = routeName(req);
-  const isLogin =
-    route.includes('login') ||
-    (req.method === 'POST' && req.body?.username && req.body?.password && !req.body?.number);
+  const body = parseBody(req);
+  req.body = body;
+  const route = routeName(req, body);
+  const isLogin = route.includes('login') || (req.method === 'POST' && body.username && body.password && !body.number);
 
   if (isLogin) {
     if (req.method !== 'POST') return res.status(405).json({ error: 'Method not allowed' });
-    const username = String(req.body?.username || '').trim();
-    const password = String(req.body?.password || '');
+    const username = String(body.username || '').trim();
+    const password = String(body.password || '');
     if (!username || !password) {
       return res.status(400).json({ ok: false, error: 'Username and password are required' });
     }
-    if (!process.env.ADMIN_USERNAME || !(process.env.ADMIN_PASSWORD || process.env.ADMIN_SECRET)) {
-      return res.status(500).json({ ok: false, error: 'Admin env vars are not set on the server' });
-    }
     if (!isAdminUser(username, password)) {
-      return res.status(401).json({ ok: false, error: 'Incorrect username or password' });
+      return res.status(401).json({ ok: false, error: 'Incorrect username or password. Use ADMIN_USERNAME and ADMIN_PASSWORD from Vercel.' });
     }
     return res.status(200).json({ ok: true, username, secret: password });
-  }
-
-  if (route.includes('shipments') || req.body?.number && req.method !== 'POST') {
-    return shipments(req, res);
-  }
-  if (route.includes('shipments') || (req.method === 'GET' && req.query?.number) || req.method === 'DELETE' || (req.method === 'POST' && req.body?.number && req.body?.status)) {
-    return shipments(req, res);
   }
 
   if (route.includes('events')) {
     if (!isAdmin(req)) return res.status(401).json({ error: 'Unauthorized' });
     if (req.method !== 'POST') return res.status(405).json({ error: 'Method not allowed' });
-    const number = String(req.body?.number || '').trim();
-    const status = String(req.body?.status || '').trim();
-    const location = String(req.body?.location || '').trim();
-    const details = String(req.body?.details || '').trim();
+    const number = String(body.number || '').trim();
+    const status = String(body.status || '').trim();
+    const location = String(body.location || '').trim();
+    const details = String(body.details || '').trim();
     if (!number || !status || !location) return res.status(400).json({ error: 'Tracking number, status and location required' });
     try {
       await withDb(async (c) => {
@@ -59,16 +55,12 @@ export default async function handler(req: any, res: any) {
 
   if (route.includes('users')) {
     if (!isAdmin(req)) return res.status(401).json({ error: 'Unauthorized' });
-    try {
-      if (req.method === 'GET') {
-        const users = await withDb(async (c) => {
-          const r = await c.query('SELECT id, email, name, disabled, created_at FROM users ORDER BY created_at DESC');
-          return r.rows.map((u) => ({ id: u.id, email: u.email, name: u.name || '', disabled: !!u.disabled, createdAt: u.created_at }));
-        });
-        return res.status(200).json({ users });
-      }
-    } catch (err: any) {
-      return res.status(500).json({ error: err.message || 'DB error' });
+    if (req.method === 'GET') {
+      const users = await withDb(async (c) => {
+        const r = await c.query('SELECT id, email, name, disabled, created_at FROM users ORDER BY created_at DESC');
+        return r.rows.map((u) => ({ id: u.id, email: u.email, name: u.name || '', disabled: !!u.disabled, createdAt: u.created_at }));
+      });
+      return res.status(200).json({ users });
     }
   }
 
@@ -101,9 +93,5 @@ export default async function handler(req: any, res: any) {
     return res.status(200).json({ locations });
   }
 
-  if (req.method === 'GET' || req.method === 'POST' || req.method === 'DELETE') {
-    return shipments(req, res);
-  }
-
-  return res.status(404).json({ error: 'Unknown admin route' });
+  return shipments(req, res);
 }
