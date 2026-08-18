@@ -1,12 +1,26 @@
 import { NavLink, Outlet, useNavigate } from 'react-router-dom';
 import { useEffect } from 'react';
-import { LayoutDashboard, Package, Megaphone, Settings, LogOut } from 'lucide-react';
+import {
+  LayoutDashboard,
+  Package,
+  Megaphone,
+  Settings,
+  LogOut,
+  Users,
+  Activity,
+  MapPin,
+  BarChart3,
+} from 'lucide-react';
 import { isAdminLoggedIn, logoutAdmin } from '@/lib/adminStore';
 
 const links = [
   { to: '/admin/dashboard', label: 'Overview', icon: LayoutDashboard },
   { to: '/admin/shipments', label: 'Shipments', icon: Package },
+  { to: '/admin/users', label: 'Users', icon: Users },
+  { to: '/admin/locations', label: 'Locations', icon: MapPin },
   { to: '/admin/banner', label: 'Banner', icon: Megaphone },
+  { to: '/admin/activity', label: 'Activity', icon: Activity },
+  { to: '/admin/reports', label: 'Reports', icon: BarChart3 },
   { to: '/admin/settings', label: 'Settings', icon: Settings },
 ];
 
@@ -31,7 +45,7 @@ export default function AdminLayout() {
             Fed<span className="text-[#FF6600]">Ex</span> Admin
           </p>
         </div>
-        <nav className="flex-1 py-4">
+        <nav className="flex-1 py-4 overflow-y-auto">
           {links.map((link) => (
             <NavLink
               key={link.to}
@@ -57,7 +71,7 @@ export default function AdminLayout() {
       </aside>
       <div className="flex-1 min-w-0">
         <header className="bg-white border-b px-8 py-4">
-          <p className="text-sm text-gray-500">Not visible on the public FedEx site</p>
+          <p className="text-sm text-gray-500">Staff console — not on the public site</p>
         </header>
         <main className="p-8">
           <Outlet />

@@ -18,6 +18,10 @@ import AdminLayout from '@/components/admin/AdminLayout';
 import AdminDashboard from '@/pages/admin/AdminDashboard';
 import AdminShipments from '@/pages/admin/AdminShipments';
 import AdminBanner from '@/pages/admin/AdminBanner';
+import AdminUsers from '@/pages/admin/AdminUsers';
+import AdminActivity from '@/pages/admin/AdminActivity';
+import AdminLocations from '@/pages/admin/AdminLocations';
+import AdminReports from '@/pages/admin/AdminReports';
 import CreateShipmentPage from '@/pages/CreateShipmentPage';
 import UserDashboard from '@/components/dashboard/UserDashboard';
 import SuppliesStore from '@/components/store/SuppliesStore';
@@ -85,7 +89,11 @@ function AppRoutes() {
         <Route path="/admin" element={<AdminLayout />}>
           <Route path="dashboard" element={<AdminDashboard />} />
           <Route path="shipments" element={<AdminShipments />} />
+          <Route path="users" element={<AdminUsers />} />
+          <Route path="locations" element={<AdminLocations />} />
           <Route path="banner" element={<AdminBanner />} />
+          <Route path="activity" element={<AdminActivity />} />
+          <Route path="reports" element={<AdminReports />} />
           <Route path="settings" element={<AdminSettings />} />
         </Route>
       </Routes>
