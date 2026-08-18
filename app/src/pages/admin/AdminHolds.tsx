@@ -38,16 +38,17 @@ export default function AdminHolds() {
   return (
     <div className="bg-white border rounded-lg p-6">
       <h1 className="text-xl font-semibold mb-2">Hold requests</h1>
-      <p className="text-sm text-gray-500 mb-6">Approve to set shipment status to Held at location.</p>
+      <p className="text-sm text-gray-500 mb-6">Approve to set shipment status to Held at location. Full customer reason is shown below each request.</p>
       <ul className="divide-y text-sm">
         {holds.map((h) => (
-          <li key={h.id} className="py-3 flex flex-wrap justify-between gap-3">
-            <div>
+          <li key={h.id} className="py-4 flex flex-wrap justify-between gap-3">
+            <div className="max-w-xl">
               <p className="font-medium">{h.tracking_number}</p>
               <p className="text-gray-600">{h.location_name}</p>
-              <p className="text-xs text-gray-400">{h.status} · {h.customer_email || 'no email'} · {h.created_at ? new Date(h.created_at).toLocaleString() : ''}</p>
+              {h.reason && <p className="mt-2 text-gray-800">{h.reason}</p>}
+              <p className="text-xs text-gray-400 mt-1">{h.status} · {h.customer_email || 'no email'} · {h.created_at ? new Date(h.created_at).toLocaleString() : ''}</p>
             </div>
-            <div className="flex gap-2">
+            <div className="flex gap-2 h-fit">
               {h.status === 'requested' && (
                 <>
                   <Button type="button" className="bg-[#4D148C] text-white" onClick={() => setStatus(h.id, 'approved')}>Approve</Button>

@@ -6,20 +6,22 @@ export default async function handler(req: any, res: any) {
       const number = String(req.body?.number || '').trim();
       const location = String(req.body?.location || '').trim();
       const email = String(req.body?.email || '').trim().toLowerCase();
+      const reason = String(req.body?.reason || '').trim();
       if (!number) return res.status(400).json({ error: 'Tracking number required' });
       if (!location) return res.status(400).json({ error: 'Hold location required' });
+      if (!reason) return res.status(400).json({ error: 'Hold reason required' });
 
       const result = await withDb(async (c) => {
         const ship = await c.query('SELECT tracking_number, status FROM shipments WHERE lower(tracking_number) = lower($1)', [number]);
         if (!ship.rowCount) throw new Error('No shipment found for that tracking number');
         const inserted = await c.query(
-          `INSERT INTO hold_requests (tracking_number, location_name, customer_email, status)
-           VALUES ($1,$2,$3,'requested') RETURNING id`,
-          [number, location, email || null]
+          `INSERT INTO hold_requests (tracking_number, location_name, customer_email, status, reason)
+           VALUES ($1,$2,$3,'requested',$4) RETURNING id`,
+          [number, location, email || null, reason]
         );
         await c.query('INSERT INTO admin_activity (action, detail) VALUES ($1,$2)', [
           'Hold requested',
-          `${number} @ ${location}`,
+          `${number} @ ${location}: ${reason}`,
         ]);
         return inserted.rows[0];
       });
@@ -31,16 +33,12 @@ export default async function handler(req: any, res: any) {
     if (req.method === 'GET') {
       const holds = await withDb(async (c) => {
         const r = await c.query(
-          `SELECT id, tracking_number, location_name, customer_email, status, created_at
+          `SELECT id, tracking_number, location_name, customer_email, status, reason, created_at
            FROM hold_requests ORDER BY created_at DESC LIMIT 200`
         );
         return r.rows;
       });
       return res.status(200).json({ holds });
-    }
-
-    if (req.method === 'POST' || req.method === 'PUT') {
-      /* handled above for customer POST */
     }
 
     if (req.method === 'PATCH') {
@@ -63,7 +61,7 @@ export default async function handler(req: any, res: any) {
           await c.query(
             `INSERT INTO shipment_events (tracking_number, location, status, details)
              VALUES ($1,$2,'Held at location',$3)`,
-            [hold.tracking_number, hold.location_name, 'Hold approved']
+            [hold.tracking_number, hold.location_name, hold.reason ? `Hold approved: ${hold.reason}` : 'Hold approved']
           );
         }
         if (status === 'released') {
@@ -80,7 +78,7 @@ export default async function handler(req: any, res: any) {
         }
         await c.query('INSERT INTO admin_activity (action, detail) VALUES ($1,$2)', [
           `Hold ${status}`,
-          `${hold.tracking_number}`,
+          `${hold.tracking_number}${hold.reason ? ': ' + hold.reason : ''}`,
         ]);
       });
       return res.status(200).json({ ok: true });
