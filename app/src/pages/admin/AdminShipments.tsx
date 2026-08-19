@@ -45,6 +45,54 @@ function blobToDataUrl(blob: Blob): Promise<string> {
   });
 }
 
+/** Build customer-facing delivery string from date (YYYY-MM-DD) + time (HH:MM). */
+function formatDeliveryLabel(date: string, time: string): string {
+  if (!date.trim()) return '';
+  try {
+    const d = new Date(`${date.trim()}T12:00:00`);
+    if (Number.isNaN(d.getTime())) return [date, time].filter(Boolean).join(' ');
+    const datePart = d.toLocaleDateString('en-US', {
+      weekday: 'short',
+      month: 'short',
+      day: 'numeric',
+      year: 'numeric',
+    });
+    if (!time.trim()) return datePart;
+    const [hh, mm] = time.trim().split(':');
+    const t = new Date();
+    t.setHours(Number(hh) || 0, Number(mm) || 0, 0, 0);
+    const timePart = t.toLocaleTimeString('en-US', { hour: 'numeric', minute: '2-digit' });
+    return `${datePart} by ${timePart}`;
+  } catch {
+    return [date, time].filter(Boolean).join(' ');
+  }
+}
+
+/** Best-effort parse of stored label back into date/time inputs. */
+function parseDeliveryFields(label?: string): { date: string; time: string } {
+  if (!label?.trim()) return { date: '', time: '' };
+  const raw = label.trim();
+  // ISO-ish prefix
+  const iso = raw.match(/^(\d{4}-\d{2}-\d{2})(?:[T\s](\d{2}:\d{2}))?/);
+  if (iso) return { date: iso[1], time: iso[2] || '' };
+  try {
+    const d = new Date(raw);
+    if (!Number.isNaN(d.getTime())) {
+      const yyyy = d.getFullYear();
+      const mm = String(d.getMonth() + 1).padStart(2, '0');
+      const dd = String(d.getDate()).padStart(2, '0');
+      const hasTime = /\d{1,2}:\d{2}/.test(raw) || raw.includes('by');
+      const time = hasTime
+        ? `${String(d.getHours()).padStart(2, '0')}:${String(d.getMinutes()).padStart(2, '0')}`
+        : '';
+      return { date: `${yyyy}-${mm}-${dd}`, time };
+    }
+  } catch {
+    /* fall through */
+  }
+  return { date: '', time: '' };
+}
+
 type ShipmentRow = {
   number: string;
   status: string;
@@ -88,6 +136,8 @@ export default function AdminShipments() {
   const [manualFee, setManualFee] = useState('');
   const [collectPayment, setCollectPayment] = useState(false);
   const [paymentInstructions, setPaymentInstructions] = useState(DEFAULT_PAYMENT_INSTRUCTIONS);
+  const [deliveryDate, setDeliveryDate] = useState('');
+  const [deliveryTime, setDeliveryTime] = useState('');
   const [routeStops, setRouteStops] = useState<Place[]>([]);
   const [selectedStops, setSelectedStops] = useState<Record<number, boolean>>({});
   const [loadingRoute, setLoadingRoute] = useState(false);
@@ -102,6 +152,10 @@ export default function AdminShipments() {
   const feeNum = manualFee.trim() ? Number(manualFee) : quoted;
   const photoCount = gallery.length;
   const previewUrls = useMemo(() => gallery.map((g) => g.dataUrl), [gallery]);
+  const deliveryPreview = useMemo(
+    () => formatDeliveryLabel(deliveryDate, deliveryTime),
+    [deliveryDate, deliveryTime]
+  );
 
   async function refresh() {
     setLoading(true);
@@ -153,6 +207,9 @@ export default function AdminShipments() {
     setManualFee(s.shippingFee != null ? String(s.shippingFee) : '');
     setCollectPayment(!!s.collectPayment);
     if (s.paymentInstructions) setPaymentInstructions(s.paymentInstructions);
+    const parsed = parseDeliveryFields(s.estimatedDelivery);
+    setDeliveryDate(parsed.date);
+    setDeliveryTime(parsed.time);
     setEditMessage('');
     setGallery([]);
     setPreviewIndex(null);
@@ -183,6 +240,14 @@ export default function AdminShipments() {
     }
   }
 
+  function deliveryPayload() {
+    const label = formatDeliveryLabel(deliveryDate, deliveryTime);
+    return {
+      estimatedDelivery: label,
+      estimatedDeliveryText: label,
+    };
+  }
+
   async function createShipment() {
     if (!origin.trim() || !destination.trim()) {
       toast.error('From and To required');
@@ -192,6 +257,7 @@ export default function AdminShipments() {
     try {
       const number = generateTrackingNumber();
       const service = FEDEX_SERVICES.find((s) => s.id === serviceId)?.label || serviceId;
+      const del = deliveryPayload();
       await apiSaveShipment({
         number,
         status: 'Label created',
@@ -201,8 +267,7 @@ export default function AdminShipments() {
         serviceId,
         location: origin.trim(),
         currentLocation: origin.trim(),
-        estimatedDelivery: '',
-        estimatedDeliveryText: '',
+        ...del,
         shippingFee: Number.isFinite(feeNum) ? feeNum : quoted,
         packageSize,
         collectPayment: collectPayment ? 'true' : 'false',
@@ -217,7 +282,11 @@ export default function AdminShipments() {
           details: 'Departed facility',
         });
       }
-      toast.success(`Created ${number} — you can upload package photos below (optional)`);
+      toast.success(
+        del.estimatedDelivery
+          ? `Created ${number} · Delivery ${del.estimatedDelivery}`
+          : `Created ${number} — you can upload package photos below (optional)`
+      );
       setEditing(number);
       setGallery([]);
       await refresh();
@@ -233,6 +302,7 @@ export default function AdminShipments() {
     setSaving(true);
     try {
       const service = FEDEX_SERVICES.find((s) => s.id === serviceId)?.label || serviceId;
+      const del = deliveryPayload();
       await apiSaveShipment({
         number: editing,
         status: editStatus,
@@ -242,8 +312,7 @@ export default function AdminShipments() {
         serviceId,
         location: editLocation.trim() || origin.trim(),
         currentLocation: editLocation.trim() || origin.trim(),
-        estimatedDelivery: '',
-        estimatedDeliveryText: '',
+        ...del,
         shippingFee: Number.isFinite(feeNum) ? feeNum : quoted,
         packageSize,
         collectPayment: collectPayment ? 'true' : 'false',
@@ -257,7 +326,7 @@ export default function AdminShipments() {
           details: editMessage.trim() || editStatus,
         });
       }
-      toast.success('Saved');
+      toast.success(del.estimatedDelivery ? `Saved · Delivery ${del.estimatedDelivery}` : 'Saved');
       await refresh();
     } catch (e: any) {
       toast.error(e.message || 'Save failed');
@@ -331,12 +400,40 @@ export default function AdminShipments() {
 
   const editingRow = editing ? list.find((s) => s.number === editing) : null;
 
+  const deliveryFields = (
+    <div className="grid sm:grid-cols-2 gap-3">
+      <div>
+        <label className="text-xs text-gray-500">Scheduled delivery date</label>
+        <Input
+          type="date"
+          value={deliveryDate}
+          onChange={(e) => setDeliveryDate(e.target.value)}
+          className="mt-0.5"
+        />
+      </div>
+      <div>
+        <label className="text-xs text-gray-500">Delivery time (optional)</label>
+        <Input
+          type="time"
+          value={deliveryTime}
+          onChange={(e) => setDeliveryTime(e.target.value)}
+          className="mt-0.5"
+        />
+      </div>
+      {deliveryPreview && (
+        <p className="sm:col-span-2 text-xs text-gray-600">
+          Customer will see: <span className="font-medium text-gray-900">{deliveryPreview}</span>
+        </p>
+      )}
+    </div>
+  );
+
   return (
     <div className="space-y-6 max-w-4xl">
       <div>
         <h1 className="text-xl font-semibold text-gray-900">Shipments</h1>
         <p className="text-sm text-gray-500">
-          Create labels, set fees, and optionally upload package photos (1 or many, before or after payment).
+          Create labels, set delivery date/time, fees, and optional package photos.
         </p>
       </div>
 
@@ -368,6 +465,9 @@ export default function AdminShipments() {
             </select>
           </div>
         </div>
+
+        {deliveryFields}
+
         <div className="flex flex-wrap gap-3 items-end">
           <div>
             <p className="text-xs text-gray-500">Quoted for this size + service</p>
@@ -433,6 +533,9 @@ export default function AdminShipments() {
               <Input value={editLocation} onChange={(e) => setEditLocation(e.target.value)} placeholder="City, ST" />
             </div>
           </div>
+
+          {deliveryFields}
+
           <div>
             <label className="text-xs text-gray-500">Scan / note</label>
             <Input value={editMessage} onChange={(e) => setEditMessage(e.target.value)} placeholder="Optional detail for timeline" />
@@ -525,6 +628,9 @@ export default function AdminShipments() {
                     {(s.hasSetupImage || s.hasTransitImage || s.hasDeliveredImage) ? ' · Has photo' : ''}
                   </p>
                   <p className="text-xs text-gray-400">{s.origin} → {s.destination}</p>
+                  {s.estimatedDelivery && (
+                    <p className="text-xs text-[#4D148C] mt-0.5">Delivery: {s.estimatedDelivery}</p>
+                  )}
                 </div>
                 <div className="flex flex-wrap gap-2">
                   <Button type="button" variant="outline" className="text-gray-900 border-gray-300" onClick={() => loadForEdit(s)}>
