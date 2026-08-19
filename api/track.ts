@@ -1,6 +1,19 @@
 import { getFedExAccessToken, mapFedExTrackResponse } from './lib/fedexTrack';
 import { withDb } from './lib/db';
 
+function publicEventDetails(status: string, provided?: string) {
+  const raw = String(provided || '').trim();
+  if (raw && !/admin/i.test(raw)) return raw;
+  const s = String(status || '').toLowerCase();
+  if (s.includes('label') || s.includes('created')) return 'Shipping label created';
+  if (s.includes('pick')) return 'We have your package';
+  if (s.includes('out for')) return 'On a local truck';
+  if (s.includes('deliver')) return 'Delivered';
+  if (s.includes('hold')) return 'Held at location';
+  if (s.includes('transit') || s.includes('on the way')) return 'On the way';
+  return '';
+}
+
 export default async function handler(req: any, res: any) {
   if (req.method !== 'GET' && req.method !== 'POST') {
     return res.status(405).json({ error: 'Method not allowed' });
@@ -12,16 +25,22 @@ export default async function handler(req: any, res: any) {
   const neonFallback = async () => {
     try {
       return await withDb(async (c) => {
+        try {
+          await c.query('ALTER TABLE shipments ADD COLUMN IF NOT EXISTS shipping_fee numeric');
+          await c.query('ALTER TABLE shipments ADD COLUMN IF NOT EXISTS package_size text');
+        } catch { /* ok */ }
         const ship = await c.query(
-          `SELECT tracking_number, status, estimated_delivery, current_location
+          `SELECT tracking_number, status, origin, destination, service, service_id,
+                  current_location, estimated_delivery, estimated_delivery_text,
+                  shipping_fee, package_size
            FROM shipments WHERE lower(tracking_number) = lower($1) LIMIT 1`,
           [trackingNumber]
         );
         if (!ship.rowCount) return null;
         const events = await c.query(
-          `SELECT location, status, details, created_at
+          `SELECT location, status, details, event_time, created_at
            FROM shipment_events WHERE lower(tracking_number) = lower($1)
-           ORDER BY created_at DESC LIMIT 50`,
+           ORDER BY COALESCE(event_time, created_at) DESC LIMIT 50`,
           [trackingNumber]
         );
         const row = ship.rows[0];
@@ -29,15 +48,25 @@ export default async function handler(req: any, res: any) {
           found: true,
           source: 'neon',
           number: row.tracking_number,
-          status: row.status,
-          estimatedDelivery: row.estimated_delivery || '',
-          history: events.rows.map((ev: any) => ({
-            date: ev.created_at ? new Date(ev.created_at).toLocaleDateString() : '',
-            time: ev.created_at ? new Date(ev.created_at).toLocaleTimeString() : '',
-            location: ev.location || '',
-            status: ev.status || row.status,
-            completed: true,
-          })),
+          status: row.status || 'Label created',
+          origin: row.origin || '',
+          destination: row.destination || '',
+          service: row.service || row.service_id || '',
+          location: row.current_location || '',
+          estimatedDelivery: row.estimated_delivery_text || (row.estimated_delivery ? String(row.estimated_delivery) : ''),
+          shippingFee: row.shipping_fee != null ? Number(row.shipping_fee) : null,
+          packageSize: row.package_size || '',
+          history: events.rows.map((ev: any) => {
+            const when = ev.event_time || ev.created_at;
+            return {
+              date: when ? new Date(when).toLocaleDateString() : '',
+              time: when ? new Date(when).toLocaleTimeString() : '',
+              location: ev.location || '',
+              status: ev.status || row.status,
+              completed: true,
+              details: publicEventDetails(ev.status || '', ev.details || ''),
+            };
+          }),
         };
       });
     } catch {
@@ -81,7 +110,17 @@ export default async function handler(req: any, res: any) {
       if (fallback) return res.status(200).json(fallback);
       return res.status(404).json({ found: false, source: 'fedex' });
     }
-    return res.status(200).json({ found: true, source: 'fedex', ...mapped });
+    // Prefer Neon extras (fee) when we have a local record
+    const local = await neonFallback();
+    return res.status(200).json({
+      found: true,
+      source: 'fedex',
+      ...mapped,
+      shippingFee: local?.shippingFee ?? null,
+      packageSize: local?.packageSize || '',
+      origin: mapped.origin || local?.origin || '',
+      destination: mapped.destination || local?.destination || '',
+    });
   } catch (err: any) {
     const fallback = await neonFallback();
     if (fallback) return res.status(200).json(fallback);
