@@ -1,4 +1,4 @@
-import { BrowserRouter as Router, Routes, Route, useLocation } from 'react-router-dom';
+import { BrowserRouter as Router, Routes, Route, Navigate, useLocation } from 'react-router-dom';
 import './i18n';
 import { Toaster } from 'sonner';
 import Header from '@/components/Header';
@@ -88,6 +88,7 @@ function AppRoutes() {
       <Routes>
         <Route path="/admin" element={<AdminLogin />} />
         <Route path="/admin" element={<AdminLayout />}>
+          <Route index element={<Navigate to="dashboard" replace />} />
           <Route path="dashboard" element={<AdminDashboard />} />
           <Route path="shipments" element={<AdminShipments />} />
           <Route path="holds" element={<AdminHolds />} />
