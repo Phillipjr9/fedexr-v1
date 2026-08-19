@@ -1,4 +1,35 @@
-import { isAdmin, withDb } from './lib/db';
+function dbUrl() {
+  return (
+    process.env.DATABASE_URL ||
+    process.env.NEON_DATABASE_URL ||
+    process.env.POSTGRES_URL ||
+    process.env.POSTGRES_PRISMA_URL ||
+    process.env.fedex_DATABASE_URL ||
+    process.env.fedex_POSTGRES_URL ||
+    process.env.fedex_POSTGRES_PRISMA_URL ||
+    ''
+  );
+}
+
+async function withDb<T>(fn: (client: any) => Promise<T>): Promise<T> {
+  const connectionString = dbUrl();
+  if (!connectionString) throw new Error('No database connection configured');
+  const { Client } = await import('pg');
+  const client = new Client({ connectionString, ssl: { rejectUnauthorized: false } });
+  await client.connect();
+  try {
+    return await fn(client);
+  } finally {
+    await client.end().catch(() => undefined);
+  }
+}
+
+function isAdmin(req: any) {
+  const expectedPass = String(process.env.ADMIN_PASSWORD || process.env.ADMIN_SECRET || 'admin').trim();
+  const header = req.headers?.['x-admin-secret'] || req.headers?.['X-Admin-Secret'];
+  const value = Array.isArray(header) ? header[0] : header;
+  return String(value || '') === expectedPass;
+}
 
 function normalizeEvent(raw: any) {
   const e = String(raw || 'setup').toLowerCase();
@@ -34,64 +65,72 @@ async function ensureImageTable(c: any) {
 }
 
 export default async function handler(req: any, res: any) {
-  if (req.method === 'GET') {
-    const trackingNumber = req.query?.number;
-    if (!trackingNumber) return res.status(400).json({ error: 'Missing number' });
-    const event = normalizeEvent(req.query?.event);
-    try {
-      const row = await withDb(async (c) => {
-        await ensureImageTable(c);
-        const r = await c.query(
-          'SELECT mime, image FROM tracking_images WHERE tracking_number = $1 AND event_type = $2',
-          [trackingNumber, event]
-        );
-        return r.rows[0] || null;
-      });
-      if (!row) return res.status(200).json({ found: false });
-      const dataUrl = `data:${row.mime};base64,${Buffer.from(row.image).toString('base64')}`;
-      res.setHeader('Cache-Control', 's-maxage=60, stale-while-revalidate=30');
-      return res.status(200).json({ found: true, dataUrl, eventType: event });
-    } catch (err: any) {
-      return res.status(500).json({ error: err?.message || 'DB error reading image' });
+  try {
+    if (req.method === 'GET') {
+      const trackingNumber = String(req.query?.number || '').trim();
+      if (!trackingNumber) return res.status(400).json({ error: 'Missing number' });
+      const event = normalizeEvent(req.query?.event || req.query?.type);
+      try {
+        const row = await withDb(async (c) => {
+          await ensureImageTable(c);
+          const r = await c.query(
+            `SELECT mime, image FROM tracking_images
+             WHERE lower(tracking_number) = lower($1) AND event_type = $2
+             LIMIT 1`,
+            [trackingNumber, event]
+          );
+          return r.rows[0] || null;
+        });
+        if (!row) return res.status(200).json({ found: false });
+        const dataUrl = `data:${row.mime};base64,${Buffer.from(row.image).toString('base64')}`;
+        res.setHeader('Cache-Control', 's-maxage=60, stale-while-revalidate=30');
+        return res.status(200).json({ found: true, dataUrl, eventType: event });
+      } catch (err: any) {
+        console.error('image GET error', err);
+        return res.status(500).json({ error: err?.message || 'DB error reading image' });
+      }
     }
+
+    if (req.method === 'POST') {
+      if (!isAdmin(req)) return res.status(401).json({ error: 'Unauthorized — sign in again on /admin' });
+      const body = parseBody(req);
+      const trackingNumber = String(body.trackingNumber || body.number || '').trim();
+      const dataUrl = body.dataUrl;
+      if (!trackingNumber || !dataUrl) {
+        return res.status(400).json({ error: 'Missing tracking number or image data' });
+      }
+      const type = normalizeEvent(body.eventType || body.event || body.type);
+      const match = String(dataUrl).match(/^data:([^;]+);base64,(.+)$/);
+      if (!match) return res.status(400).json({ error: 'Invalid image data (expected data URL)' });
+
+      const mime = match[1];
+      const b64 = match[2];
+      if (b64.length > 4_000_000) {
+        return res.status(413).json({ error: 'Image too large. Use a smaller photo (under ~2 MB).' });
+      }
+
+      try {
+        const buf = Buffer.from(b64, 'base64');
+        await withDb(async (c) => {
+          await ensureImageTable(c);
+          await c.query(
+            `INSERT INTO tracking_images (tracking_number, event_type, mime, image)
+             VALUES ($1, $2, $3, $4)
+             ON CONFLICT (tracking_number, event_type)
+             DO UPDATE SET mime = EXCLUDED.mime, image = EXCLUDED.image, created_at = now()`,
+            [trackingNumber, type, mime, buf]
+          );
+        });
+        return res.status(200).json({ ok: true, eventType: type, bytes: buf.length });
+      } catch (err: any) {
+        console.error('image POST error', err);
+        return res.status(500).json({ error: err?.message || 'DB error saving image' });
+      }
+    }
+
+    return res.status(405).json({ error: 'Method not allowed' });
+  } catch (err: any) {
+    console.error('images handler error', err);
+    return res.status(500).json({ error: err?.message || 'Image API error' });
   }
-
-  if (req.method === 'POST') {
-    if (!isAdmin(req)) return res.status(401).json({ error: 'Unauthorized — sign in again on /admin' });
-    const body = parseBody(req);
-    const trackingNumber = String(body.trackingNumber || body.number || '').trim();
-    const dataUrl = body.dataUrl;
-    if (!trackingNumber || !dataUrl) {
-      return res.status(400).json({ error: 'Missing tracking number or image data' });
-    }
-    const type = normalizeEvent(body.eventType);
-    const match = String(dataUrl).match(/^data:([^;]+);base64,(.+)$/);
-    if (!match) return res.status(400).json({ error: 'Invalid image data (expected data URL)' });
-
-    const mime = match[1];
-    const b64 = match[2];
-    // Reject huge payloads early (~3MB binary ≈ 4MB base64)
-    if (b64.length > 4_000_000) {
-      return res.status(413).json({ error: 'Image too large. Use a smaller photo (under ~2 MB).' });
-    }
-
-    try {
-      const buf = Buffer.from(b64, 'base64');
-      await withDb(async (c) => {
-        await ensureImageTable(c);
-        await c.query(
-          `INSERT INTO tracking_images (tracking_number, event_type, mime, image)
-           VALUES ($1, $2, $3, $4)
-           ON CONFLICT (tracking_number, event_type)
-           DO UPDATE SET mime = EXCLUDED.mime, image = EXCLUDED.image, created_at = now()`,
-          [trackingNumber, type, mime, buf]
-        );
-      });
-      return res.status(200).json({ ok: true, eventType: type, bytes: Buffer.from(b64, 'base64').length });
-    } catch (err: any) {
-      return res.status(500).json({ error: err?.message || 'DB error saving image' });
-    }
-  }
-
-  return res.status(405).json({ error: 'Method not allowed' });
 }

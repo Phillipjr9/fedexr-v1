@@ -54,13 +54,26 @@ function firstEventDate(events: TrackingEvent[]): string {
   return [e.date, e.time].filter(Boolean).join(' ');
 }
 
+async function fetchTrackingImage(number: string, event: 'setup' | 'transit' | 'delivered') {
+  try {
+    const res = await fetch(
+      `/api/get-tracking-image?number=${encodeURIComponent(number)}&event=${event}`
+    );
+    if (!res.ok) return null;
+    const json = await res.json().catch(() => ({}));
+    return json.found && json.dataUrl ? (json.dataUrl as string) : null;
+  } catch {
+    return null;
+  }
+}
+
 export default function TrackingPage() {
   const [searchParams, setSearchParams] = useSearchParams();
   const [query, setQuery] = useState(searchParams.get('number') || searchParams.get('trkn') || '');
   const [result, setResult] = useState<TrackResult | null>(null);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState('');
-  const [showImages, setShowImages] = useState(false);
+  const [showImages, setShowImages] = useState(true);
   const [showDetails, setShowDetails] = useState(false);
   const [payOpen, setPayOpen] = useState(false);
   const [payName, setPayName] = useState('');
@@ -73,7 +86,6 @@ export default function TrackingPage() {
     setLoading(true);
     setError('');
     setResult(null);
-    setShowImages(false);
     setShowDetails(false);
     setPayOpen(false);
     try {
@@ -84,6 +96,13 @@ export default function TrackingPage() {
       }
       const shipment = trackJson.shipment || trackJson;
       const rawEvents = trackJson.events || trackJson.history || shipment.events || shipment.history || [];
+
+      const [setupImage, transitImage, deliveredImage] = await Promise.all([
+        fetchTrackingImage(number, 'setup'),
+        fetchTrackingImage(number, 'transit'),
+        fetchTrackingImage(number, 'delivered'),
+      ]);
+
       setResult({
         number: shipment.number || number,
         status: shipment.status || 'Label created',
@@ -106,10 +125,11 @@ export default function TrackingPage() {
           completed: ev.completed !== false,
           detail: ev.detail || ev.details || ev.message || '',
         })),
-        setupImage: trackJson.setupImage || shipment.setupImage || null,
-        transitImage: trackJson.transitImage || shipment.transitImage || null,
-        deliveredImage: trackJson.deliveredImage || shipment.deliveredImage || null,
+        setupImage,
+        transitImage,
+        deliveredImage,
       });
+      setShowImages(!!(setupImage || transitImage || deliveredImage));
       setSearchParams({ number });
     } catch (e: any) {
       setError(e.message || 'Could not track');
@@ -167,6 +187,7 @@ export default function TrackingPage() {
   const setupImage = result?.setupImage;
   const transitImage = result?.transitImage;
   const deliveredImage = result?.deliveredImage;
+  const hasAnyImage = !!(setupImage || transitImage || deliveredImage);
 
   return (
     <div className="min-h-screen bg-[#F7F7F8] text-gray-900">
@@ -198,7 +219,6 @@ export default function TrackingPage() {
 
       {result && (
         <div className="max-w-lg mx-auto min-h-screen pb-28">
-          {/* Status header — primary focus */}
           <div className="bg-white border-b border-gray-100 px-5 pt-5 pb-4">
             <div className="flex items-start gap-3">
               <div className="mt-0.5 flex h-11 w-11 shrink-0 items-center justify-center rounded-full bg-[#4D148C]/10">
@@ -209,13 +229,14 @@ export default function TrackingPage() {
                 <p className="text-xl font-bold text-gray-900 leading-tight mt-0.5">{result.status || 'Label created'}</p>
                 <p className="mt-1.5 font-mono text-[13px] text-gray-500 tracking-wide">{result.number}</p>
                 {result.service && (
-                  <p className="mt-1 text-xs text-gray-500">{result.service}{result.packageSize ? ` · ${result.packageSize}` : ''}</p>
+                  <p className="mt-1 text-xs text-gray-500">
+                    {result.service}{result.packageSize ? ` · ${result.packageSize}` : ''}
+                  </p>
                 )}
               </div>
             </div>
           </div>
 
-          {/* Compact payment strip (secondary) */}
           {paymentRequired && feeLabel && (
             <div className="mx-4 mt-3 rounded-xl border border-amber-200/80 bg-white shadow-sm overflow-hidden">
               <button
@@ -255,14 +276,12 @@ export default function TrackingPage() {
             </div>
           )}
 
-          {/* Timeline — main content */}
           <div className="mx-4 mt-4 mb-6 rounded-2xl bg-white border border-gray-100 shadow-sm px-5 py-6">
             <p className="text-[11px] font-bold uppercase tracking-wider text-gray-400 mb-5">Shipment progress</p>
 
             <div className="relative pl-12">
               <div className="absolute left-[18px] top-3 bottom-3 w-[2px] bg-gray-200" aria-hidden />
 
-              {/* FROM */}
               <div className="relative mb-10">
                 <div className="absolute -left-12 top-0 flex h-9 w-9 items-center justify-center">
                   <span className="absolute h-9 w-9 rounded-full bg-[#4D148C]/15" />
@@ -299,7 +318,6 @@ export default function TrackingPage() {
               <Milestone label="On the way" active={stage >= 2} done={stage > 2} />
               <Milestone label="Out for delivery" active={stage >= 3} done={stage > 3} />
 
-              {/* TO */}
               <div className="relative pt-1">
                 <div className="absolute -left-12 top-1.5 flex h-9 w-9 items-center justify-center">
                   <span
@@ -329,7 +347,8 @@ export default function TrackingPage() {
               </div>
             </div>
 
-            {!paymentRequired && (setupImage || transitImage || deliveredImage) && (
+            {/* Package photos — always available when uploaded */}
+            {hasAnyImage && (
               <div className="mt-8 pt-5 border-t border-gray-100">
                 <button
                   type="button"
@@ -341,9 +360,24 @@ export default function TrackingPage() {
                 </button>
                 {showImages && (
                   <div className="mt-3 space-y-3">
-                    {setupImage && <img src={setupImage} alt="Package" className="w-full rounded-xl border" />}
-                    {transitImage && <img src={transitImage} alt="In transit" className="w-full rounded-xl border" />}
-                    {deliveredImage && <img src={deliveredImage} alt="Delivered" className="w-full rounded-xl border" />}
+                    {setupImage && (
+                      <div>
+                        <p className="text-xs font-medium text-gray-500 mb-1.5">Package photo</p>
+                        <img src={setupImage} alt="Package" className="w-full rounded-xl border border-gray-100" />
+                      </div>
+                    )}
+                    {transitImage && (
+                      <div>
+                        <p className="text-xs font-medium text-gray-500 mb-1.5">In transit</p>
+                        <img src={transitImage} alt="In transit" className="w-full rounded-xl border border-gray-100" />
+                      </div>
+                    )}
+                    {deliveredImage && (
+                      <div>
+                        <p className="text-xs font-medium text-gray-500 mb-1.5">Delivered</p>
+                        <img src={deliveredImage} alt="Delivered" className="w-full rounded-xl border border-gray-100" />
+                      </div>
+                    )}
                   </div>
                 )}
               </div>
@@ -357,7 +391,7 @@ export default function TrackingPage() {
             )}
           </div>
 
-          <div className="fixed bottom-0 left-0 right-0 max-w-lg mx-auto bg-white/95 backdrop-blur border-t border-gray-100 px-4 py-3 flex gap-2 safe-area-pb">
+          <div className="fixed bottom-0 left-0 right-0 max-w-lg mx-auto bg-white/95 backdrop-blur border-t border-gray-100 px-4 py-3 flex gap-2">
             <Button asChild variant="outline" className="flex-1 h-11">
               <Link to="/">Home</Link>
             </Button>
