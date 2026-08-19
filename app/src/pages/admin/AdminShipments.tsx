@@ -5,8 +5,8 @@ import { Input } from '@/components/ui/input';
 import { toast } from 'sonner';
 import { FEDEX_SERVICES, generateTrackingNumber, geocodePlaces, fetchRoute, type Place } from '@/lib/places';
 import { PACKAGE_SIZES, formatFee, quoteFee } from '@/lib/shippingRates';
-import { apiAddEvent, apiDeleteShipment, apiListShipments, apiSaveShipment, apiUploadImage, apiMarkPaid, type ImageEventType } from '@/lib/adminApi';
-import { Pencil } from 'lucide-react';
+import { apiAddEvent, apiDeleteShipment, apiListShipments, apiSaveShipment, apiUploadImage, apiMarkPaid, apiGetImage, type ImageEventType } from '@/lib/adminApi';
+import { Pencil, ImageIcon } from 'lucide-react';
 
 async function compressImage(file: File, maxEdge = 1200, quality = 0.72): Promise<Blob> {
   if (!file.type.startsWith('image/')) return file;
@@ -26,6 +26,15 @@ async function compressImage(file: File, maxEdge = 1200, quality = 0.72): Promis
   });
 }
 
+function blobToDataUrl(blob: Blob): Promise<string> {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onload = () => resolve(String(reader.result || ''));
+    reader.onerror = () => reject(new Error('Could not read image file'));
+    reader.readAsDataURL(blob);
+  });
+}
+
 type ShipmentRow = {
   number: string;
   status: string;
@@ -41,6 +50,9 @@ type ShipmentRow = {
   collectPayment?: boolean;
   paymentInstructions?: string;
   paymentRequired?: boolean;
+  hasSetupImage?: boolean;
+  hasTransitImage?: boolean;
+  hasDeliveredImage?: boolean;
 };
 
 const DEFAULT_PAYMENT_INSTRUCTIONS =
@@ -70,6 +82,8 @@ export default function AdminShipments() {
   const [saving, setSaving] = useState(false);
   const [photoKind, setPhotoKind] = useState<ImageEventType>('setup');
   const [uploading, setUploading] = useState(false);
+  const [previewUrl, setPreviewUrl] = useState<string | null>(null);
+  const [previewLoading, setPreviewLoading] = useState(false);
 
   const serviceLabel = FEDEX_SERVICES.find((s) => s.id === serviceId)?.label || serviceId;
   const quoted = useMemo(() => quoteFee(packageSize, serviceLabel), [packageSize, serviceLabel]);
@@ -99,6 +113,18 @@ export default function AdminShipments() {
     }
   }, [searchParams, list]);
 
+  async function loadPreview(number: string, kind: ImageEventType) {
+    setPreviewLoading(true);
+    try {
+      const url = await apiGetImage(number, kind);
+      setPreviewUrl(url);
+    } catch {
+      setPreviewUrl(null);
+    } finally {
+      setPreviewLoading(false);
+    }
+  }
+
   function loadForEdit(s: ShipmentRow) {
     setEditing(s.number);
     setEditStatus(s.status || 'Label created');
@@ -114,6 +140,9 @@ export default function AdminShipments() {
     setCollectPayment(!!s.collectPayment);
     if (s.paymentInstructions) setPaymentInstructions(s.paymentInstructions);
     setEditMessage('');
+    setPhotoKind('setup');
+    setPreviewUrl(null);
+    loadPreview(s.number, 'setup');
   }
 
   async function loadRouteStops() {
@@ -174,8 +203,9 @@ export default function AdminShipments() {
           details: 'Departed facility',
         });
       }
-      toast.success(`Created ${number}`);
+      toast.success(`Created ${number} — you can upload photos below anytime`);
       setEditing(number);
+      setPreviewUrl(null);
       await refresh();
     } catch (e: any) {
       toast.error(e.message || 'Create failed');
@@ -224,12 +254,30 @@ export default function AdminShipments() {
 
   async function onUpload(e: React.ChangeEvent<HTMLInputElement>) {
     const file = e.target.files?.[0];
-    if (!file || !editing) return;
+    if (!file || !editing) {
+      if (!editing) toast.error('Open a shipment with Edit first, then upload');
+      return;
+    }
+    if (!file.type.startsWith('image/')) {
+      toast.error('Please choose an image file');
+      e.target.value = '';
+      return;
+    }
     setUploading(true);
     try {
       const blob = await compressImage(file);
-      await apiUploadImage(editing, blob as any, photoKind);
-      toast.success('Photo uploaded');
+      const dataUrl = await blobToDataUrl(blob);
+      if (!dataUrl.startsWith('data:')) throw new Error('Could not prepare image');
+      await apiUploadImage(editing, dataUrl, photoKind);
+      toast.success(
+        photoKind === 'setup'
+          ? 'Package photo uploaded (shows on tracking anytime)'
+          : photoKind === 'transit'
+            ? 'In-transit photo uploaded'
+            : 'Delivered photo uploaded'
+      );
+      setPreviewUrl(dataUrl);
+      await refresh();
     } catch (err: any) {
       toast.error(err.message || 'Upload failed');
     } finally {
@@ -249,11 +297,15 @@ export default function AdminShipments() {
     );
   }, [list, q]);
 
+  const editingRow = editing ? list.find((s) => s.number === editing) : null;
+
   return (
     <div className="space-y-6 max-w-4xl">
       <div>
         <h1 className="text-xl font-semibold text-gray-900">Shipments</h1>
-        <p className="text-sm text-gray-500">Create labels, set fees, require payment, upload package photos.</p>
+        <p className="text-sm text-gray-500">
+          Create labels, set fees, require payment, upload package photos (before or after payment).
+        </p>
       </div>
 
       <div className="bg-white border rounded-xl p-5 space-y-4">
@@ -326,8 +378,15 @@ export default function AdminShipments() {
       </div>
 
       {editing && (
-        <div className="bg-white border rounded-xl p-5 space-y-3">
-          <p className="font-medium text-sm">Update status / scan — <span className="font-mono">{editing}</span></p>
+        <div className="bg-white border rounded-xl p-5 space-y-4">
+          <p className="font-medium text-sm">
+            Update status / photos — <span className="font-mono">{editing}</span>
+            {editingRow?.collectPayment && (
+              <span className="ml-2 text-xs font-normal text-gray-500">
+                {editingRow.feePaid ? '(payment received)' : '(payment still due — photos still allowed)'}
+              </span>
+            )}
+          </p>
           <div className="grid sm:grid-cols-2 gap-3">
             <div>
               <label className="text-xs text-gray-500">Status</label>
@@ -346,17 +405,50 @@ export default function AdminShipments() {
             <label className="text-xs text-gray-500">Scan / note</label>
             <Input value={editMessage} onChange={(e) => setEditMessage(e.target.value)} placeholder="Optional detail for timeline" />
           </div>
-          <div className="flex flex-wrap gap-2 items-center">
-            <Button type="button" onClick={saveEdit} disabled={saving} className="bg-[#FF6200] hover:bg-[#e55a00] text-white">{saving ? 'Saving…' : 'Save update'}</Button>
-            <select className="border rounded h-10 px-2 text-sm" value={photoKind} onChange={(e) => setPhotoKind(e.target.value as ImageEventType)}>
-              <option value="setup">Package photo (setup)</option>
-              <option value="transit">In transit photo</option>
-              <option value="delivered">Delivered photo</option>
-            </select>
-            <label className="inline-flex items-center gap-2 text-sm border rounded-md px-3 h-10 cursor-pointer hover:bg-gray-50">
-              <input type="file" accept="image/*" className="hidden" onChange={onUpload} disabled={uploading} />
-              {uploading ? 'Uploading…' : 'Upload photo'}
-            </label>
+          <Button type="button" onClick={saveEdit} disabled={saving} className="bg-[#FF6200] hover:bg-[#e55a00] text-white">
+            {saving ? 'Saving…' : 'Save update'}
+          </Button>
+
+          {/* Photos — independent of payment */}
+          <div className="border-t pt-4 space-y-3">
+            <div className="flex items-start gap-2">
+              <ImageIcon className="h-5 w-5 text-[#4D148C] mt-0.5 shrink-0" />
+              <div>
+                <p className="font-medium text-sm text-gray-900">Package photos</p>
+                <p className="text-xs text-gray-500">
+                  Upload anytime — before or after the customer pays. Photos appear on the public tracking page.
+                </p>
+              </div>
+            </div>
+            <div className="flex flex-wrap gap-2 items-center">
+              <select
+                className="border rounded h-10 px-2 text-sm"
+                value={photoKind}
+                onChange={(e) => {
+                  const k = e.target.value as ImageEventType;
+                  setPhotoKind(k);
+                  if (editing) loadPreview(editing, k);
+                }}
+              >
+                <option value="setup">Package photo (label / pickup)</option>
+                <option value="transit">In transit photo</option>
+                <option value="delivered">Delivered photo</option>
+              </select>
+              <label className="inline-flex items-center gap-2 text-sm border rounded-md px-3 h-10 cursor-pointer hover:bg-gray-50 bg-white">
+                <input type="file" accept="image/*" className="hidden" onChange={onUpload} disabled={uploading} />
+                {uploading ? 'Uploading…' : 'Choose & upload photo'}
+              </label>
+            </div>
+            {previewLoading && <p className="text-xs text-gray-400">Loading current photo…</p>}
+            {previewUrl && !previewLoading && (
+              <div className="max-w-sm">
+                <p className="text-xs text-gray-500 mb-1.5">Current {photoKind} photo</p>
+                <img src={previewUrl} alt="Package" className="w-full rounded-lg border border-gray-200" />
+              </div>
+            )}
+            {!previewUrl && !previewLoading && (
+              <p className="text-xs text-gray-400">No {photoKind} photo yet for this tracking number.</p>
+            )}
           </div>
         </div>
       )}
@@ -373,7 +465,12 @@ export default function AdminShipments() {
               <div className="flex flex-wrap justify-between gap-3">
                 <div>
                   <p className="font-mono">{s.number}</p>
-                  <p className="text-gray-500">{s.status}{s.shippingFee != null ? ` · ${formatFee(s.shippingFee)}` : ''}{s.collectPayment ? (s.feePaid ? ' · Paid' : ' · Payment due') : ''}</p>
+                  <p className="text-gray-500">
+                    {s.status}
+                    {s.shippingFee != null ? ` · ${formatFee(s.shippingFee)}` : ''}
+                    {s.collectPayment ? (s.feePaid ? ' · Paid' : ' · Payment due') : ''}
+                    {(s.hasSetupImage || s.hasTransitImage || s.hasDeliveredImage) ? ' · Has photo' : ''}
+                  </p>
                   <p className="text-xs text-gray-400">{s.origin} → {s.destination}</p>
                 </div>
                 <div className="flex flex-wrap gap-2">
