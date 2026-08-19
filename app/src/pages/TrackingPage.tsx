@@ -204,6 +204,7 @@ export default function TrackingPage() {
   const [transitImage, setTransitImage] = useState<string | null>(null);
   const [deliveredImage, setDeliveredImage] = useState<string | null>(null);
   const [showHistory, setShowHistory] = useState(false);
+  const [showImages, setShowImages] = useState(false);
   const [starred, setStarred] = useState(false);
   const [payName, setPayName] = useState('');
   const [payEmail, setPayEmail] = useState('');
@@ -229,6 +230,7 @@ export default function TrackingPage() {
     setIsTracking(true);
     setResult(null);
     setShowHistory(false);
+    setShowImages(false);
     try {
       let next: TrackResult | null = null;
       const trackRes = await fetch(`/api/track?number=${encodeURIComponent(number)}`);
@@ -438,10 +440,37 @@ export default function TrackingPage() {
             </div>
 
             {!paymentRequired && (setupImage || transitImage || deliveredImage) && (
-              <div className="mt-2 mb-6 grid gap-3">
-                {setupImage && <div><p className="text-xs font-semibold text-gray-500 mb-1">PACKAGE PHOTO</p><img src={setupImage} alt="Package" className="w-full max-h-48 object-cover rounded-lg border" /></div>}
-                {transitImage && <div><p className="text-xs font-semibold text-gray-500 mb-1">ON THE WAY</p><img src={transitImage} alt="In transit" className="w-full max-h-48 object-cover rounded-lg border" /></div>}
-                {deliveredImage && <div><p className="text-xs font-semibold text-gray-500 mb-1">PROOF OF DELIVERY</p><img src={deliveredImage} alt="Delivered" className="w-full max-h-48 object-cover rounded-lg border" /></div>}
+              <div className="mt-2 mb-6">
+                <button
+                  type="button"
+                  onClick={() => setShowImages((v) => !v)}
+                  className="flex items-center gap-1 text-[#007AB7] text-sm font-medium mb-3"
+                >
+                  <ChevronDown className={`h-4 w-4 transition-transform ${showImages ? 'rotate-180' : ''}`} />
+                  <span className="underline">{showImages ? 'Hide package photo' : 'Show package photo'}</span>
+                </button>
+                {showImages && (
+                  <div className="grid gap-3">
+                    {setupImage && (
+                      <div>
+                        <p className="text-xs font-semibold text-gray-500 mb-1">PACKAGE PHOTO</p>
+                        <img src={setupImage} alt="Package" className="w-full max-h-56 object-cover rounded-lg border" />
+                      </div>
+                    )}
+                    {transitImage && (
+                      <div>
+                        <p className="text-xs font-semibold text-gray-500 mb-1">ON THE WAY</p>
+                        <img src={transitImage} alt="In transit" className="w-full max-h-56 object-cover rounded-lg border" />
+                      </div>
+                    )}
+                    {deliveredImage && (
+                      <div>
+                        <p className="text-xs font-semibold text-gray-500 mb-1">PROOF OF DELIVERY</p>
+                        <img src={deliveredImage} alt="Delivered" className="w-full max-h-56 object-cover rounded-lg border" />
+                      </div>
+                    )}
+                  </div>
+                )}
               </div>
             )}
 
