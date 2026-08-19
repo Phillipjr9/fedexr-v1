@@ -1,5 +1,28 @@
-import { getFedExAccessToken, mapFedExTrackResponse } from './lib/fedexTrack';
-import { withDb, dbUrl } from './lib/db';
+function dbUrl() {
+  return (
+    process.env.DATABASE_URL ||
+    process.env.NEON_DATABASE_URL ||
+    process.env.POSTGRES_URL ||
+    process.env.POSTGRES_PRISMA_URL ||
+    process.env.fedex_DATABASE_URL ||
+    process.env.fedex_POSTGRES_URL ||
+    process.env.fedex_POSTGRES_PRISMA_URL ||
+    ''
+  );
+}
+
+async function withDb<T>(fn: (client: any) => Promise<T>): Promise<T> {
+  const connectionString = dbUrl();
+  if (!connectionString) throw new Error('No database connection configured');
+  const { Client } = await import('pg');
+  const client = new Client({ connectionString, ssl: { rejectUnauthorized: false } });
+  await client.connect();
+  try {
+    return await fn(client);
+  } finally {
+    await client.end().catch(() => undefined);
+  }
+}
 
 function publicEventDetails(status: string, provided?: string) {
   const raw = String(provided || '').trim();
@@ -26,7 +49,7 @@ async function neonLookup(trackingNumber: string) {
         await c.query('ALTER TABLE shipments ADD COLUMN IF NOT EXISTS collect_payment BOOLEAN DEFAULT false');
         await c.query('ALTER TABLE shipments ADD COLUMN IF NOT EXISTS payment_instructions TEXT');
       } catch {
-        /* schema may already match */
+        /* ok */
       }
       const ship = await c.query(
         `SELECT tracking_number, status, origin, destination, service, service_id,
@@ -117,7 +140,6 @@ export default async function handler(req: any, res: any) {
       return res.status(400).json({ found: false, error: 'Missing tracking number' });
     }
 
-    // Prefer admin-created shipments in Neon so labels work immediately
     const local = await neonLookup(trackingNumber);
     if (local) {
       return res.status(200).json(local);
@@ -133,9 +155,10 @@ export default async function handler(req: any, res: any) {
       });
     }
 
-    const useSandbox = process.env.FEDEX_API_ENV !== 'production';
-    const host = useSandbox ? 'https://apis-sandbox.fedex.com' : 'https://apis.fedex.com';
     try {
+      const { getFedExAccessToken, mapFedExTrackResponse } = await import('./lib/fedexTrack');
+      const useSandbox = process.env.FEDEX_API_ENV !== 'production';
+      const host = useSandbox ? 'https://apis-sandbox.fedex.com' : 'https://apis.fedex.com';
       const token = await getFedExAccessToken(host, clientId, clientSecret);
       const trackRes = await fetch(`${host}/track/v1/trackingnumbers`, {
         method: 'POST',
