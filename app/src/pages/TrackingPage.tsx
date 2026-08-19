@@ -49,6 +49,64 @@ function publicDetails(status: string, details?: string) {
   return '';
 }
 
+/**
+ * FedEx-style place label: "Avenel, NJ US" — never a full street address.
+ */
+function shortPlace(raw?: string | null, uppercase = false): string {
+  if (!raw) return '';
+  let s = String(raw).replace(/\s+/g, ' ').trim();
+  if (!s) return '';
+
+  // Drop leading street numbers / unit lines when comma-separated
+  const parts = s.split(',').map((p) => p.trim()).filter(Boolean);
+  if (parts.length >= 2) {
+    // If first segment looks like a street (starts with digits), drop it
+    if (/^\d/.test(parts[0]) || /\b(st|street|ave|avenue|rd|road|blvd|dr|drive|ln|lane|ct|court|way|hwy)\b/i.test(parts[0])) {
+      parts.shift();
+    }
+  }
+
+  // Prefer last 2–3 geographic chunks: City, ST [Country]
+  let chunks = parts.length ? parts : [s];
+  if (chunks.length > 3) chunks = chunks.slice(-3);
+  if (chunks.length === 1) {
+    // "City ST 12345" or "City ST US"
+    const m = chunks[0].match(/^(.+?)\s+([A-Z]{2})(?:\s+(\d{5}(-\d{4})?|[A-Z]{2,3}))?$/i);
+    if (m) {
+      const city = m[1].replace(/\s+\d{5}(-\d{4})?$/, '').trim();
+      const st = m[2].toUpperCase();
+      const tail = m[3] && !/^\d/.test(m[3]) ? m[3].toUpperCase() : 'US';
+      s = `${city}, ${st} ${tail}`;
+    }
+  } else {
+    // Clean zip from last chunks
+    chunks = chunks.map((c, i) => {
+      if (i === chunks.length - 1) return c.replace(/\b\d{5}(-\d{4})?\b/g, '').trim();
+      return c.replace(/\b\d{5}(-\d{4})?\b/g, '').trim();
+    }).filter(Boolean);
+    if (chunks.length >= 2) {
+      const last = chunks[chunks.length - 1];
+      const prev = chunks[chunks.length - 2];
+      // "NJ" + "United States" → "NJ US"
+      if (/united states|usa/i.test(last)) {
+        s = `${chunks.slice(0, -1).join(', ')} US`.replace(/,\s*([A-Z]{2})\s+US$/i, ', $1 US');
+        // if prev is state code already handled
+        if (/^[A-Z]{2}$/i.test(prev)) s = `${chunks.slice(0, -2).concat(prev.toUpperCase()).join(', ')} US`;
+      } else if (/^[A-Z]{2}$/i.test(last)) {
+        s = `${chunks.slice(0, -1).join(', ')}, ${last.toUpperCase()} US`;
+      } else {
+        s = chunks.join(', ');
+        if (!/\b(US|USA|United States|[A-Z]{2})\s*$/i.test(s)) s = `${s} US`;
+      }
+    } else {
+      s = chunks[0] || s;
+    }
+  }
+
+  s = s.replace(/,\s*,/g, ',').replace(/\s+/g, ' ').trim();
+  return uppercase ? s.toUpperCase() : s;
+}
+
 function milestoneIndex(status: string) {
   const s = status.toLowerCase();
   if (s.includes('deliver') && !s.includes('out')) return 4;
@@ -183,41 +241,45 @@ export default function TrackingPage() {
     const ofd = findEvent(hist, 'out for');
     const del = findEvent(hist, 'deliver');
 
+    // FROM / Label Created — title case city, not street (matches real FedEx app)
+    const fromPlace = shortPlace(result.origin || label?.location || '', false);
+    const toPlace = shortPlace(result.destination || '', true);
+
     return [
       {
         title: 'FROM',
-        place: result.origin || label?.location || '—',
+        place: fromPlace || '—',
         sub: 'Label Created',
         when: formatWhen(label),
       },
       {
         title: 'WE HAVE YOUR PACKAGE',
-        place: (picked?.location || result.location || '').toUpperCase() || '—',
+        place: shortPlace(picked?.location || result.location || '', true) || '',
         sub: '',
         when: formatWhen(picked),
       },
       {
         title: 'ON THE WAY',
-        place: (transit?.location || result.location || '').toUpperCase() || '—',
+        place: shortPlace(transit?.location || result.location || '', true) || '',
         sub: '',
         when: formatWhen(transit),
       },
       {
         title: 'OUT FOR DELIVERY',
-        place: (ofd?.location || '').toUpperCase() || '',
+        place: shortPlace(ofd?.location || '', true) || '',
         sub: '',
         when: formatWhen(ofd),
       },
       delivered
         ? {
             title: 'DELIVERED',
-            place: (del?.location || result.destination || '').toUpperCase() || '—',
+            place: shortPlace(del?.location || result.destination || '', true) || '—',
             sub: 'Delivered',
             when: formatWhen(del),
           }
         : {
             title: 'TO',
-            place: (result.destination || '').toUpperCase() || '—',
+            place: toPlace || '—',
             sub: 'Scheduled Delivery Date',
             when: result.estimatedDelivery || '',
           },
@@ -340,7 +402,7 @@ export default function TrackingPage() {
                       <p className={`text-sm font-bold tracking-wide ${isFuture ? 'text-gray-400' : 'text-gray-900'}`}>
                         {m.title}
                       </p>
-                      {m.place && (
+                      {m.place && m.place !== '—' && (
                         <p className={`text-sm mt-0.5 ${isFuture ? 'text-gray-400' : 'text-gray-800'}`}>{m.place}</p>
                       )}
                       {m.sub && (
@@ -400,10 +462,11 @@ export default function TrackingPage() {
                 )}
                 {(result.history || []).map((ev, i) => {
                   const details = publicDetails(ev.status, ev.details);
+                  const place = shortPlace(ev.location, false);
                   return (
                     <div key={`${ev.status}-${i}`} className="text-sm">
                       <p className="font-semibold text-gray-900">{ev.status}</p>
-                      <p className="text-gray-600">{ev.location}</p>
+                      {place && <p className="text-gray-600">{place}</p>}
                       <p className="text-gray-400 text-xs">{ev.date}{ev.time ? ` · ${ev.time}` : ''}</p>
                       {details && <p className="text-gray-500 text-xs mt-0.5">{details}</p>}
                     </div>
