@@ -33,6 +33,8 @@ async function withDb(fn: (client: any) => Promise<any>) {
     await client.query('ALTER TABLE shipments ADD COLUMN IF NOT EXISTS fee_paid_at TIMESTAMPTZ');
     await client.query('ALTER TABLE shipments ADD COLUMN IF NOT EXISTS collect_payment BOOLEAN DEFAULT false');
     await client.query('ALTER TABLE shipments ADD COLUMN IF NOT EXISTS payment_instructions TEXT');
+    await client.query('ALTER TABLE shipments ADD COLUMN IF NOT EXISTS notify_email TEXT');
+    await client.query('ALTER TABLE shipments ADD COLUMN IF NOT EXISTS notify_enabled BOOLEAN DEFAULT false');
     await client.query('ALTER TABLE users ADD COLUMN IF NOT EXISTS password_hash TEXT');
     await client.query('ALTER TABLE users ADD COLUMN IF NOT EXISTS disabled BOOLEAN DEFAULT false');
     await client.query('ALTER TABLE users ADD COLUMN IF NOT EXISTS approved BOOLEAN DEFAULT false');
@@ -72,6 +74,15 @@ function resourceOf(req: any, body: any) {
 
 function boolish(v: any) {
   return v === true || v === 'true' || v === 1 || v === '1';
+}
+
+async function fireNotify(number: string, status: string, location: string, details: string) {
+  try {
+    const { notifyShipmentStatus } = await import('./lib/notify');
+    await notifyShipmentStatus({ number, status, location, detail: details });
+  } catch (e) {
+    console.error('notify fire failed', e);
+  }
 }
 
 export default async function handler(req: any, res: any) {
@@ -221,7 +232,7 @@ export default async function handler(req: any, res: any) {
         const { rows } = await c.query(
           `SELECT s.tracking_number, s.status, s.origin, s.destination, s.service, s.service_id,
                   s.current_location, s.estimated_delivery_text, s.updated_at, s.shipping_fee, s.package_size,
-                  s.fee_paid, s.collect_payment, s.payment_instructions,
+                  s.fee_paid, s.collect_payment, s.payment_instructions, s.notify_email, s.notify_enabled,
                   EXISTS (SELECT 1 FROM tracking_images i WHERE i.tracking_number = s.tracking_number AND i.event_type = 'setup') AS has_setup_image,
                   EXISTS (SELECT 1 FROM tracking_images i WHERE i.tracking_number = s.tracking_number AND i.event_type = 'delivered') AS has_delivered_image,
                   EXISTS (SELECT 1 FROM tracking_images i WHERE i.tracking_number = s.tracking_number AND i.event_type = 'transit') AS has_transit_image
@@ -254,6 +265,8 @@ export default async function handler(req: any, res: any) {
             collectPayment,
             paymentInstructions: r.payment_instructions || '',
             paymentRequired: !!(collectPayment && shippingFee && shippingFee > 0 && !feePaid),
+            notifyEmail: r.notify_email || '',
+            notifyEnabled: !!r.notify_enabled,
           };
         });
       });
@@ -284,7 +297,8 @@ export default async function handler(req: any, res: any) {
         await c.query('INSERT INTO shipment_events (tracking_number, location, status, details) VALUES ($1,$2,$3,$4)', [number, location, status, details]);
         await c.query('UPDATE shipments SET status = $2, current_location = $3, updated_at = now() WHERE tracking_number = $1', [number, status, location]);
       });
-      return res.status(200).json({ ok: true });
+      await fireNotify(number, status, location, details);
+      return res.status(200).json({ ok: true, notified: true });
     }
 
     if (req.method === 'POST' && (body.action === 'markPaid' || body.markPaid === true || body.markPaid === 'true')) {
@@ -305,6 +319,7 @@ export default async function handler(req: any, res: any) {
           );
         } catch { /* ok */ }
       });
+      await fireNotify(number, 'Payment received', 'Offline', 'Shipping fee confirmed');
       return res.status(200).json({ ok: true, feePaid: true });
     }
 
@@ -323,6 +338,8 @@ export default async function handler(req: any, res: any) {
       const estimatedDelivery = String(body.estimatedDelivery || body.estimatedDeliveryText || '').trim();
       const service = String(body.service || body.serviceId || '').trim();
       const serviceId = String(body.serviceId || body.service || '').trim();
+      const notifyEmail = String(body.notifyEmail || '').trim();
+      const notifyEnabled = body.notifyEnabled === true || body.notifyEnabled === 'true' || !!notifyEmail;
 
       await withDb(async (c) => {
         await c.query(`CREATE TABLE IF NOT EXISTS shipments (
@@ -341,6 +358,8 @@ export default async function handler(req: any, res: any) {
           fee_paid_at TIMESTAMPTZ,
           collect_payment BOOLEAN DEFAULT false,
           payment_instructions TEXT,
+          notify_email TEXT,
+          notify_enabled BOOLEAN DEFAULT false,
           updated_at TIMESTAMPTZ DEFAULT now()
         )`);
         await c.query(`CREATE TABLE IF NOT EXISTS shipment_events (
@@ -353,10 +372,13 @@ export default async function handler(req: any, res: any) {
           created_at TIMESTAMPTZ DEFAULT now()
         )`);
         await c.query(
-          `INSERT INTO shipments (tracking_number, status, origin, destination, service, service_id, current_location, estimated_delivery_text, shipping_fee, package_size, fee_paid, collect_payment, payment_instructions, updated_at)
-           VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,now())
-           ON CONFLICT (tracking_number) DO UPDATE SET status = EXCLUDED.status, origin = EXCLUDED.origin, destination = EXCLUDED.destination, service = EXCLUDED.service, service_id = EXCLUDED.service_id, current_location = EXCLUDED.current_location, estimated_delivery_text = EXCLUDED.estimated_delivery_text, shipping_fee = EXCLUDED.shipping_fee, package_size = EXCLUDED.package_size, fee_paid = EXCLUDED.fee_paid, collect_payment = EXCLUDED.collect_payment, payment_instructions = EXCLUDED.payment_instructions, updated_at = now()`,
-          [number, status, body.origin || '', body.destination || '', service, serviceId, location, estimatedDelivery, Number.isFinite(fee) ? fee : null, body.packageSize || '', feePaid, collectPayment, paymentInstructions]
+          `INSERT INTO shipments (tracking_number, status, origin, destination, service, service_id, current_location, estimated_delivery_text, shipping_fee, package_size, fee_paid, collect_payment, payment_instructions, notify_email, notify_enabled, updated_at)
+           VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,now())
+           ON CONFLICT (tracking_number) DO UPDATE SET status = EXCLUDED.status, origin = EXCLUDED.origin, destination = EXCLUDED.destination, service = EXCLUDED.service, service_id = EXCLUDED.service_id, current_location = EXCLUDED.current_location, estimated_delivery_text = EXCLUDED.estimated_delivery_text, shipping_fee = EXCLUDED.shipping_fee, package_size = EXCLUDED.package_size, fee_paid = EXCLUDED.fee_paid, collect_payment = EXCLUDED.collect_payment, payment_instructions = EXCLUDED.payment_instructions,
+             notify_email = COALESCE(NULLIF(EXCLUDED.notify_email, ''), shipments.notify_email),
+             notify_enabled = CASE WHEN EXCLUDED.notify_email <> '' THEN true ELSE COALESCE(EXCLUDED.notify_enabled, shipments.notify_enabled) END,
+             updated_at = now()`,
+          [number, status, body.origin || '', body.destination || '', service, serviceId, location, estimatedDelivery, Number.isFinite(fee) ? fee : null, body.packageSize || '', feePaid, collectPayment, paymentInstructions, notifyEmail, notifyEnabled]
         );
         if (!skipEvent) {
           await c.query('INSERT INTO shipment_events (tracking_number, location, status, details) VALUES ($1,$2,$3,$4)', [number, location || body.destination || '', status, details]);
@@ -366,6 +388,9 @@ export default async function handler(req: any, res: any) {
           number + (collectPayment && !feePaid ? ' (payment collection on)' : ''),
         ]);
       });
+      if (!skipEvent) {
+        await fireNotify(number, status, location || body.destination || '', details);
+      }
       return res.status(200).json({
         ok: true,
         number,
