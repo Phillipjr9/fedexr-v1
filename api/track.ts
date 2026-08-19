@@ -38,6 +38,9 @@ function publicEventDetails(status: string, provided?: string) {
   return '';
 }
 
+const NOT_FOUND =
+  'Sorry, we could not find tracking information for this number. Please check the number and try again, or contact support if you need help.';
+
 async function neonLookup(trackingNumber: string) {
   if (!dbUrl()) return null;
   try {
@@ -137,7 +140,7 @@ export default async function handler(req: any, res: any) {
       (req.method === 'GET' ? req.query?.number : req.body?.number) || req.query?.number;
     const trackingNumber = String(number || '').trim();
     if (!trackingNumber) {
-      return res.status(400).json({ found: false, error: 'Missing tracking number' });
+      return res.status(400).json({ found: false, error: 'Please enter a tracking number.' });
     }
 
     const local = await neonLookup(trackingNumber);
@@ -150,7 +153,7 @@ export default async function handler(req: any, res: any) {
     if (!clientId || !clientSecret) {
       return res.status(404).json({
         found: false,
-        error: 'No shipment found for this tracking number. Create it in Admin → Shipments first.',
+        error: NOT_FOUND,
         source: 'neon',
       });
     }
@@ -176,13 +179,13 @@ export default async function handler(req: any, res: any) {
       if (!trackRes.ok) {
         return res.status(404).json({
           found: false,
-          error: json?.errors?.[0]?.message || 'Tracking not found',
+          error: NOT_FOUND,
           source: 'fedex',
         });
       }
       const mapped = mapFedExTrackResponse(json, trackingNumber);
       if (!mapped) {
-        return res.status(404).json({ found: false, error: 'Tracking not found', source: 'fedex' });
+        return res.status(404).json({ found: false, error: NOT_FOUND, source: 'fedex' });
       }
       const timeline = mapped.history || [];
       return res.status(200).json({
@@ -202,7 +205,7 @@ export default async function handler(req: any, res: any) {
       console.error('fedex track error', err);
       return res.status(404).json({
         found: false,
-        error: err?.message || 'Tracking not found',
+        error: NOT_FOUND,
         source: 'fedex',
       });
     }
@@ -210,7 +213,7 @@ export default async function handler(req: any, res: any) {
     console.error('track handler error', err);
     return res.status(500).json({
       found: false,
-      error: err?.message || 'Track error',
+      error: 'We could not look up this shipment right now. Please try again in a moment.',
     });
   }
 }

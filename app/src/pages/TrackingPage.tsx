@@ -54,6 +54,9 @@ function firstEventDate(events: TrackingEvent[]): string {
   return [e.date, e.time].filter(Boolean).join(' ');
 }
 
+const NOT_FOUND =
+  'Sorry, we could not find tracking information for this number. Please check the number and try again, or contact support if you need help.';
+
 async function fetchTrackingImage(number: string, event: 'setup' | 'transit' | 'delivered') {
   try {
     const res = await fetch(
@@ -92,7 +95,7 @@ export default function TrackingPage() {
       const res = await fetch(`/api/track?number=${encodeURIComponent(number)}`);
       const trackJson = await res.json().catch(() => ({}));
       if (!res.ok || trackJson.found === false) {
-        throw new Error(trackJson.error || 'Tracking not found. Create the label in Admin → Shipments first.');
+        throw new Error(trackJson.error || NOT_FOUND);
       }
       const shipment = trackJson.shipment || trackJson;
       const rawEvents = trackJson.events || trackJson.history || shipment.events || shipment.history || [];
@@ -132,7 +135,7 @@ export default function TrackingPage() {
       setShowImages(!!(setupImage || transitImage || deliveredImage));
       setSearchParams({ number });
     } catch (e: any) {
-      setError(e.message || 'Could not track');
+      setError(e.message || NOT_FOUND);
     } finally {
       setLoading(false);
     }
@@ -212,7 +215,7 @@ export default function TrackingPage() {
                 {loading ? '…' : <Search className="h-4 w-4" />}
               </Button>
             </form>
-            {error && <p className="text-sm text-red-600">{error}</p>}
+            {error && <p className="text-sm text-red-600 leading-relaxed">{error}</p>}
           </div>
         </section>
       )}
@@ -347,7 +350,6 @@ export default function TrackingPage() {
               </div>
             </div>
 
-            {/* Package photos — always available when uploaded */}
             {hasAnyImage && (
               <div className="mt-8 pt-5 border-t border-gray-100">
                 <button
