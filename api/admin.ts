@@ -81,17 +81,17 @@ export default async function handler(req: any, res: any) {
                   EXISTS (SELECT 1 FROM tracking_images i WHERE i.tracking_number = s.tracking_number AND i.event_type = 'setup') AS has_setup_image,
                   EXISTS (SELECT 1 FROM tracking_images i WHERE i.tracking_number = s.tracking_number AND i.event_type = 'delivered') AS has_delivered_image
            FROM shipments s ${where}
-           ORDER BY s.updated_at DESC NULLS LAST, s.created_at DESC`,
+           ORDER BY s.updated_at DESC NULLS LAST`,
           params
         );
         const eventsByNumber: Record<string, any[]> = {};
         if (rows.length) {
           const ev = await c.query(
-            'SELECT tracking_number, event_time, created_at, location, status, details FROM shipment_events WHERE tracking_number = ANY($1) ORDER BY COALESCE(event_time, created_at) DESC',
+            'SELECT tracking_number, event_time, location, status, details FROM shipment_events WHERE tracking_number = ANY($1) ORDER BY event_time DESC',
             [rows.map((r: any) => r.tracking_number)]
           );
           for (const e of ev.rows) {
-            const when = e.event_time || e.created_at;
+            const when = e.event_time;
             (eventsByNumber[e.tracking_number] ||= []).push({
               date: when ? new Date(when).toLocaleDateString() : '',
               time: when ? new Date(when).toLocaleTimeString() : '',
