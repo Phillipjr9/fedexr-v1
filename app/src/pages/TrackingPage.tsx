@@ -1,11 +1,6 @@
 import { useEffect, useMemo, useState } from 'react';
 import { Link, useSearchParams } from 'react-router-dom';
-import {
-  Search,
-  MapPin,
-  ArrowRight,
-  ChevronDown,
-} from 'lucide-react';
+import { Search, ChevronDown, MapPin } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { toast } from 'sonner';
@@ -43,6 +38,23 @@ function formatFee(n: number) {
   return new Intl.NumberFormat('en-US', { style: 'currency', currency: 'USD' }).format(n);
 }
 
+/** Map status → which milestone is active (0=FROM/Label Created … 4=TO/Delivered) */
+function stageFromStatus(status: string, paymentRequired: boolean): number {
+  if (paymentRequired) return 0;
+  const s = (status || '').toLowerCase();
+  if (/deliver/.test(s) && !/out for/.test(s)) return 4;
+  if (/out for/.test(s)) return 3;
+  if (/transit|facility|on the way|in transit|departed|arrived/.test(s)) return 2;
+  if (/picked|we have|pickup|received/.test(s)) return 1;
+  return 0; // Label created
+}
+
+function firstEventDate(events: TrackingEvent[]): string {
+  const e = events?.[0];
+  if (!e) return '';
+  return [e.date, e.time].filter(Boolean).join(' ');
+}
+
 export default function TrackingPage() {
   const [searchParams, setSearchParams] = useSearchParams();
   const [query, setQuery] = useState(searchParams.get('number') || searchParams.get('trkn') || '');
@@ -50,7 +62,7 @@ export default function TrackingPage() {
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState('');
   const [showImages, setShowImages] = useState(false);
-  const [showHistory, setShowHistory] = useState(false);
+  const [showDetails, setShowDetails] = useState(false);
   const [payName, setPayName] = useState('');
   const [payEmail, setPayEmail] = useState('');
   const [paying, setPaying] = useState(false);
@@ -62,6 +74,7 @@ export default function TrackingPage() {
     setError('');
     setResult(null);
     setShowImages(false);
+    setShowDetails(false);
     try {
       const res = await fetch(`/api/track?number=${encodeURIComponent(number)}`);
       const trackJson = await res.json().catch(() => ({}));
@@ -112,16 +125,8 @@ export default function TrackingPage() {
 
   const paymentRequired = !!(result?.paymentRequired);
   const feeLabel = result?.shippingFee != null && result.shippingFee > 0 ? formatFee(result.shippingFee) : '';
-
-  const activeIndex = useMemo(() => {
-    if (!result) return -1;
-    if (result.paymentRequired) return 0;
-    const events = result.events || [];
-    const lastDone = events.map((e, i) => (e.completed ? i : -1)).filter((i) => i >= 0).pop();
-    return lastDone ?? 0;
-  }, [result]);
-
-  const delivered = !!result && !paymentRequired && /deliver/i.test(result.status) && !/out for/i.test(result.status);
+  const stage = result ? stageFromStatus(result.status, paymentRequired) : 0;
+  const delivered = stage >= 4;
 
   async function submitPayment(e: React.FormEvent) {
     e.preventDefault();
@@ -144,14 +149,22 @@ export default function TrackingPage() {
     }
   }
 
+  const labelDate = useMemo(() => {
+    if (!result) return '';
+    return firstEventDate(result.events) || new Date().toLocaleString('en-US', {
+      month: 'numeric', day: 'numeric', year: '2-digit', hour: 'numeric', minute: '2-digit',
+    });
+  }, [result]);
+
   const setupImage = result?.setupImage;
   const transitImage = result?.transitImage;
   const deliveredImage = result?.deliveredImage;
 
   return (
-    <div className="min-h-screen bg-[#f5f5f5] text-gray-900">
+    <div className="min-h-screen bg-white text-gray-900">
+      {/* Search (no result yet) */}
       {!result && (
-        <section className="max-w-lg mx-auto px-4 pt-10 pb-16">
+        <section className="max-w-lg mx-auto px-4 pt-24 pb-16">
           <div className="bg-white rounded-xl shadow-sm border p-6 space-y-4">
             <h1 className="text-xl font-semibold">Track a package</h1>
             <form
@@ -177,11 +190,10 @@ export default function TrackingPage() {
       )}
 
       {result && (
-        <div className="max-w-lg mx-auto bg-white min-h-screen pb-28 relative">
-          <div className="bg-[#FF6200] text-white text-center text-sm font-semibold tracking-wide py-2.5 uppercase">Get updates</div>
-
+        <div className="max-w-lg mx-auto bg-white min-h-screen pb-28 pt-4">
+          {/* Payment banner — only when admin enabled collect_payment */}
           {paymentRequired && feeLabel && (
-            <div className="mx-5 mt-4 rounded-xl border-2 border-[#FF6200] bg-orange-50 px-4 py-4 text-sm space-y-3">
+            <div className="mx-5 mb-4 rounded-xl border-2 border-[#FF6200] bg-orange-50 px-4 py-4 text-sm space-y-3">
               <div>
                 <p className="font-bold text-gray-900 text-base">Pay {feeLabel} to continue tracking</p>
                 <p className="text-gray-700 mt-1">
@@ -208,52 +220,123 @@ export default function TrackingPage() {
           )}
 
           {!paymentRequired && feeLabel && (
-            <div className="mx-5 mt-4 rounded-lg border border-green-200 bg-green-50 px-4 py-3 text-sm">
+            <div className="mx-5 mb-4 rounded-lg border border-green-200 bg-green-50 px-4 py-3 text-sm">
               <p className="font-semibold text-gray-900">Shipping charge {feeLabel} · Paid</p>
-              {result.packageSize && <p className="text-xs text-gray-600 mt-0.5">{result.packageSize}{result.service ? ` · ${result.service}` : ''}</p>}
+              {result.packageSize && (
+                <p className="text-xs text-gray-600 mt-0.5">
+                  {result.packageSize}{result.service ? ` · ${result.service}` : ''}
+                </p>
+              )}
             </div>
           )}
 
-          <div className="px-5 pt-5 pb-2">
-            <p className="text-xs text-gray-500 uppercase tracking-wide">Tracking ID</p>
-            <p className="font-mono text-lg font-semibold">{result.number}</p>
-            <p className="text-sm text-gray-600 mt-1">{result.status}</p>
-            {(result.origin || result.destination) && (
-              <p className="text-xs text-gray-500 mt-2 flex items-center gap-1">
-                <MapPin className="h-3.5 w-3.5" />
-                {result.origin} <ArrowRight className="h-3 w-3" /> {result.destination}
-              </p>
-            )}
-          </div>
+          {/* ——— FedEx-style progress timeline (matches reference screenshot) ——— */}
+          <div className="px-5 pt-2 pb-6">
+            <div className="relative pl-14">
+              {/* Vertical connector line */}
+              <div
+                className="absolute left-[22px] top-10 bottom-4 w-[3px] rounded-full bg-gray-200"
+                aria-hidden
+              />
 
-          <div className="px-5 py-4">
-            <ol className="relative border-l border-gray-200 ml-3 space-y-6">
-              {(result.events.length ? result.events : [{ date: '', time: '', location: result.origin || '', status: 'Label created', completed: !paymentRequired }]).map((ev, index) => {
-                const isActive = index === activeIndex;
-                const isDone = paymentRequired ? index === 0 : (ev.completed || index <= activeIndex);
-                return (
-                  <li key={index} className="ml-4">
-                    <span
-                      className={`absolute -left-1.5 mt-1.5 h-3 w-3 rounded-full border ${
-                        isDone ? (delivered && index === activeIndex ? 'bg-green-600 border-green-600' : 'bg-[#FF6200] border-[#FF6200]') : 'bg-white border-gray-300'
-                      }`}
-                    />
-                    <div>
-                      <p className={`text-sm font-medium ${isDone ? 'text-gray-900' : 'text-gray-400'}`}>{ev.status}</p>
-                      {(ev.location || ev.date) && (
-                        <p className="text-xs text-gray-500">{[ev.location, ev.date, ev.time].filter(Boolean).join(' · ')}</p>
-                      )}
-                      {isActive && index === 0 && paymentRequired && feeLabel && (
-                        <p className="text-xs text-[#FF6200] mt-2 font-medium">Pay {feeLabel} to continue tracking</p>
-                      )}
+              {/* Stage 0 — FROM / Label Created (active pin) */}
+              <div className="relative mb-8">
+                {/* Pin with soft halo */}
+                <div className="absolute -left-14 top-0 flex h-12 w-12 items-center justify-center">
+                  <span className="absolute h-12 w-12 rounded-full bg-[#4D148C]/15" />
+                  <span className="relative flex h-10 w-10 items-center justify-center rounded-full bg-[#4D148C] shadow-sm">
+                    <MapPin className="h-5 w-5 text-white" strokeWidth={2.25} />
+                  </span>
+                </div>
+
+                {/* FROM card */}
+                <div className="rounded-2xl bg-[#F3F3F5] px-4 py-3.5">
+                  <p className="text-[11px] font-bold uppercase tracking-wide text-gray-900">From</p>
+                  <p className="text-[15px] font-semibold text-gray-900 leading-snug mt-0.5">
+                    {result.origin || '—'}
+                  </p>
+                  <p className="mt-2 text-[14px] italic text-gray-700">Label Created</p>
+                  {labelDate && (
+                    <p className="text-[13px] text-gray-600 mt-0.5">{labelDate}</p>
+                  )}
+                  {paymentRequired && feeLabel ? (
+                    <p className="mt-2 text-[13px] font-medium text-[#FF6200]">
+                      Pay {feeLabel} to continue tracking
+                    </p>
+                  ) : (
+                    <button
+                      type="button"
+                      onClick={() => setShowDetails((v) => !v)}
+                      className="mt-2 text-[13px] text-gray-900 underline underline-offset-2"
+                    >
+                      {showDetails ? 'Hide details' : 'View more details'}
+                    </button>
+                  )}
+                  {showDetails && !paymentRequired && (
+                    <div className="mt-2 text-xs text-gray-600 space-y-1 border-t border-gray-200 pt-2">
+                      <p>Tracking: <span className="font-mono">{result.number}</span></p>
+                      {result.service && <p>Service: {result.service}</p>}
+                      {result.packageSize && <p>Package: {result.packageSize}</p>}
+                      {result.currentLocation && <p>Last location: {result.currentLocation}</p>}
                     </div>
-                  </li>
-                );
-              })}
-            </ol>
+                  )}
+                </div>
+              </div>
 
+              {/* Stage 1 — WE HAVE YOUR PACKAGE */}
+              <Milestone
+                label="WE HAVE YOUR PACKAGE"
+                active={stage >= 1}
+                done={stage > 1}
+              />
+
+              {/* Stage 2 — ON THE WAY */}
+              <Milestone
+                label="ON THE WAY"
+                active={stage >= 2}
+                done={stage > 2}
+              />
+
+              {/* Stage 3 — OUT FOR DELIVERY */}
+              <Milestone
+                label="OUT FOR DELIVERY"
+                active={stage >= 3}
+                done={stage > 3}
+              />
+
+              {/* Stage 4 — TO / destination */}
+              <div className="relative pb-2">
+                <div className="absolute -left-14 top-1 flex h-5 w-5 items-center justify-center">
+                  <span
+                    className={`h-3 w-3 rounded-full ${
+                      delivered
+                        ? 'bg-green-600'
+                        : stage >= 4
+                          ? 'bg-[#4D148C]'
+                          : 'bg-gray-300'
+                    }`}
+                  />
+                </div>
+                <p
+                  className={`text-[13px] font-bold uppercase tracking-wide ${
+                    delivered ? 'text-green-700' : stage >= 4 ? 'text-gray-900' : 'text-gray-400'
+                  }`}
+                >
+                  To
+                </p>
+                <p
+                  className={`text-[14px] mt-0.5 ${
+                    delivered ? 'text-green-700 font-semibold' : stage >= 4 ? 'text-gray-800' : 'text-gray-400'
+                  }`}
+                >
+                  {result.destination || '—'}
+                </p>
+              </div>
+            </div>
+
+            {/* Package photos (hidden until toggle; only after payment unlocked) */}
             {!paymentRequired && (setupImage || transitImage || deliveredImage) && (
-              <div className="mt-6">
+              <div className="mt-8">
                 <button
                   type="button"
                   className="flex items-center gap-2 text-sm text-gray-800"
@@ -272,20 +355,10 @@ export default function TrackingPage() {
               </div>
             )}
 
-            {!paymentRequired && (
-              <button type="button" className="mt-6 text-sm underline text-gray-700" onClick={() => setShowHistory((v) => !v)}>
-                {showHistory ? 'Hide travel history' : 'Show travel history'}
-              </button>
-            )}
-            {showHistory && !paymentRequired && (
-              <ul className="mt-3 text-xs text-gray-600 space-y-2">
-                {result.events.map((ev, i) => (
-                  <li key={i}>
-                    <span className="font-medium text-gray-800">{ev.status}</span>
-                    {(ev.location || ev.date) && <> — {[ev.location, ev.date, ev.time].filter(Boolean).join(', ')}</>}
-                  </li>
-                ))}
-              </ul>
+            {result.estimatedDelivery && !paymentRequired && (
+              <p className="mt-6 text-sm text-gray-600">
+                Scheduled delivery: <span className="font-medium text-gray-900">{result.estimatedDelivery}</span>
+              </p>
             )}
           </div>
 
@@ -307,6 +380,36 @@ export default function TrackingPage() {
           </div>
         </div>
       )}
+    </div>
+  );
+}
+
+/** Grey milestone row under the FROM card */
+function Milestone({
+  label,
+  active,
+  done,
+}: {
+  label: string;
+  active: boolean;
+  done: boolean;
+}) {
+  return (
+    <div className="relative mb-8">
+      <div className="absolute -left-14 top-1 flex h-5 w-5 items-center justify-center">
+        <span
+          className={`h-3 w-3 rounded-full ${
+            done || active ? 'bg-[#4D148C]' : 'bg-gray-300'
+          }`}
+        />
+      </div>
+      <p
+        className={`text-[13px] font-bold uppercase tracking-wide ${
+          done || active ? 'text-gray-800' : 'text-gray-400'
+        }`}
+      >
+        {label}
+      </p>
     </div>
   );
 }
