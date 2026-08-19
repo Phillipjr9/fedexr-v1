@@ -11,6 +11,7 @@ function publicEventDetails(status: string, provided?: string) {
   if (s.includes('deliver')) return 'Delivered';
   if (s.includes('hold')) return 'Held at location';
   if (s.includes('transit') || s.includes('on the way')) return 'On the way';
+  if (s.includes('payment')) return 'Shipping fee paid';
   return '';
 }
 
@@ -28,11 +29,12 @@ export default async function handler(req: any, res: any) {
         try {
           await c.query('ALTER TABLE shipments ADD COLUMN IF NOT EXISTS shipping_fee numeric');
           await c.query('ALTER TABLE shipments ADD COLUMN IF NOT EXISTS package_size text');
+          await c.query('ALTER TABLE shipments ADD COLUMN IF NOT EXISTS fee_paid BOOLEAN DEFAULT false');
         } catch { /* ok */ }
         const ship = await c.query(
           `SELECT tracking_number, status, origin, destination, service, service_id,
                   current_location, estimated_delivery, estimated_delivery_text,
-                  shipping_fee, package_size
+                  shipping_fee, package_size, fee_paid
            FROM shipments WHERE lower(tracking_number) = lower($1) LIMIT 1`,
           [trackingNumber]
         );
@@ -44,6 +46,9 @@ export default async function handler(req: any, res: any) {
           [trackingNumber]
         );
         const row = ship.rows[0];
+        const shippingFee = row.shipping_fee != null ? Number(row.shipping_fee) : null;
+        const feePaid = !!row.fee_paid;
+        const paymentRequired = !!(shippingFee && shippingFee > 0 && !feePaid);
         return {
           found: true,
           source: 'neon',
@@ -54,8 +59,10 @@ export default async function handler(req: any, res: any) {
           service: row.service || row.service_id || '',
           location: row.current_location || '',
           estimatedDelivery: row.estimated_delivery_text || (row.estimated_delivery ? String(row.estimated_delivery) : ''),
-          shippingFee: row.shipping_fee != null ? Number(row.shipping_fee) : null,
+          shippingFee,
           packageSize: row.package_size || '',
+          feePaid,
+          paymentRequired,
           history: events.rows.map((ev: any) => {
             const when = ev.event_time || ev.created_at;
             return {
@@ -110,7 +117,6 @@ export default async function handler(req: any, res: any) {
       if (fallback) return res.status(200).json(fallback);
       return res.status(404).json({ found: false, source: 'fedex' });
     }
-    // Prefer Neon extras (fee) when we have a local record
     const local = await neonFallback();
     return res.status(200).json({
       found: true,
@@ -118,6 +124,8 @@ export default async function handler(req: any, res: any) {
       ...mapped,
       shippingFee: local?.shippingFee ?? null,
       packageSize: local?.packageSize || '',
+      feePaid: local?.feePaid ?? true,
+      paymentRequired: local?.paymentRequired ?? false,
       origin: mapped.origin || local?.origin || '',
       destination: mapped.destination || local?.destination || '',
     });
