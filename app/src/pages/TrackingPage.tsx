@@ -49,15 +49,6 @@ function publicDetails(status: string, details?: string) {
   return '';
 }
 
-/** FedEx milestone order from real app */
-const MILESTONES = [
-  { key: 'from', title: 'FROM', activeIcon: 'pin' },
-  { key: 'have', title: 'WE HAVE YOUR PACKAGE', activeIcon: 'pin' },
-  { key: 'way', title: 'ON THE WAY', activeIcon: 'arrow' },
-  { key: 'ofd', title: 'OUT FOR DELIVERY', activeIcon: 'arrow' },
-  { key: 'to', title: 'TO', activeIcon: 'check' },
-] as const;
-
 function milestoneIndex(status: string) {
   const s = status.toLowerCase();
   if (s.includes('deliver') && !s.includes('out')) return 4;
@@ -79,39 +70,40 @@ function formatWhen(ev?: TrackingEvent) {
   return ev.date || ev.time || '';
 }
 
+async function fetchImage(number: string, event: string) {
+  try {
+    const res = await fetch(`/api/images?number=${encodeURIComponent(number)}&event=${event}`);
+    if (!res.ok) return null;
+    const j = await res.json();
+    return j.found && j.dataUrl ? (j.dataUrl as string) : null;
+  } catch {
+    return null;
+  }
+}
+
 export default function TrackingPage() {
   const [params] = useSearchParams();
   const [trackingNumber, setTrackingNumber] = useState(params.get('number') || '');
   const [isTracking, setIsTracking] = useState(false);
   const [result, setResult] = useState<TrackResult | null>(null);
   const [setupImage, setSetupImage] = useState<string | null>(null);
+  const [transitImage, setTransitImage] = useState<string | null>(null);
   const [deliveredImage, setDeliveredImage] = useState<string | null>(null);
   const [showHistory, setShowHistory] = useState(false);
   const [starred, setStarred] = useState(false);
 
   const loadImages = async (number: string, status: string) => {
     setSetupImage(null);
+    setTransitImage(null);
     setDeliveredImage(null);
-    try {
-      const setup = await fetch(`/api/images?number=${encodeURIComponent(number)}&event=setup`);
-      if (setup.ok) {
-        const j = await setup.json();
-        if (j.found && j.dataUrl) setSetupImage(j.dataUrl);
-      }
-    } catch {
-      /* optional */
-    }
-    if (/deliver/i.test(status) && !/out for/i.test(status)) {
-      try {
-        const delivered = await fetch(`/api/images?number=${encodeURIComponent(number)}&event=delivered`);
-        if (delivered.ok) {
-          const j = await delivered.json();
-          if (j.found && j.dataUrl) setDeliveredImage(j.dataUrl);
-        }
-      } catch {
-        /* optional */
-      }
-    }
+    const [setup, transit, delivered] = await Promise.all([
+      fetchImage(number, 'setup'),
+      fetchImage(number, 'transit'),
+      /deliver/i.test(status) && !/out for/i.test(status) ? fetchImage(number, 'delivered') : Promise.resolve(null),
+    ]);
+    if (setup) setSetupImage(setup);
+    if (transit) setTransitImage(transit);
+    if (delivered) setDeliveredImage(delivered);
   };
 
   const trackNumber = async (raw: string) => {
@@ -197,28 +189,24 @@ export default function TrackingPage() {
         place: result.origin || label?.location || '—',
         sub: 'Label Created',
         when: formatWhen(label),
-        extra: null as string | null,
       },
       {
         title: 'WE HAVE YOUR PACKAGE',
         place: (picked?.location || result.location || '').toUpperCase() || '—',
         sub: '',
         when: formatWhen(picked),
-        extra: null,
       },
       {
         title: 'ON THE WAY',
         place: (transit?.location || result.location || '').toUpperCase() || '—',
         sub: '',
         when: formatWhen(transit),
-        extra: null,
       },
       {
         title: 'OUT FOR DELIVERY',
         place: (ofd?.location || '').toUpperCase() || '',
         sub: '',
         when: formatWhen(ofd),
-        extra: null,
       },
       delivered
         ? {
@@ -226,21 +214,18 @@ export default function TrackingPage() {
             place: (del?.location || result.destination || '').toUpperCase() || '—',
             sub: 'Delivered',
             when: formatWhen(del),
-            extra: null,
           }
         : {
             title: 'TO',
             place: (result.destination || '').toUpperCase() || '—',
             sub: 'Scheduled Delivery Date',
             when: result.estimatedDelivery || '',
-            extra: result.estimatedDelivery ? null : null,
           },
     ];
   }, [result, delivered]);
 
   return (
     <div className="min-h-screen bg-white">
-      {/* Search entry (when no result yet) */}
       {!result && (
         <section className="bg-[#4D148C] py-12 px-4">
           <div className="max-w-lg mx-auto text-center">
@@ -277,10 +262,8 @@ export default function TrackingPage() {
         </section>
       )}
 
-      {/* FedEx-style result */}
       {result && (
         <div className="max-w-lg mx-auto bg-white min-h-screen pb-28 relative">
-          {/* Orange updates bar */}
           <div className="bg-[#FF6200] text-white text-center text-sm font-semibold tracking-wide py-2.5 uppercase">
             Get updates
           </div>
@@ -290,7 +273,6 @@ export default function TrackingPage() {
               MORE OPTIONS
             </button>
 
-            {/* Tracking ID */}
             <div className="mb-8">
               <p className="text-xs font-semibold tracking-wide text-gray-800 mb-1">TRACKING ID</p>
               <div className="flex items-center gap-2">
@@ -317,7 +299,6 @@ export default function TrackingPage() {
               </div>
             </div>
 
-            {/* Vertical milestone timeline */}
             <div className="relative pl-2">
               {milestoneData.map((m, index) => {
                 const isActive = index === active;
@@ -327,7 +308,6 @@ export default function TrackingPage() {
 
                 return (
                   <div key={m.title} className="relative flex gap-4 pb-8 last:pb-2">
-                    {/* Rail */}
                     <div className="relative flex flex-col items-center w-10 flex-shrink-0">
                       {!isLast && (
                         <div
@@ -356,36 +336,21 @@ export default function TrackingPage() {
                       )}
                     </div>
 
-                    {/* Content */}
-                    <div
-                      className={`flex-1 min-w-0 ${isActive ? 'bg-gray-100 rounded-2xl px-4 py-3 -ml-1' : 'pt-1'}`}
-                    >
-                      <p
-                        className={`text-sm font-bold tracking-wide ${
-                          isFuture ? 'text-gray-400' : 'text-gray-900'
-                        }`}
-                      >
+                    <div className={`flex-1 min-w-0 ${isActive ? 'bg-gray-100 rounded-2xl px-4 py-3 -ml-1' : 'pt-1'}`}>
+                      <p className={`text-sm font-bold tracking-wide ${isFuture ? 'text-gray-400' : 'text-gray-900'}`}>
                         {m.title}
                       </p>
                       {m.place && (
-                        <p className={`text-sm mt-0.5 ${isFuture ? 'text-gray-400' : 'text-gray-800'}`}>
-                          {m.place}
-                        </p>
+                        <p className={`text-sm mt-0.5 ${isFuture ? 'text-gray-400' : 'text-gray-800'}`}>{m.place}</p>
                       )}
                       {m.sub && (
-                        <p className={`text-sm italic mt-1 ${isFuture ? 'text-gray-400' : 'text-gray-600'}`}>
-                          {m.sub}
-                        </p>
+                        <p className={`text-sm italic mt-1 ${isFuture ? 'text-gray-400' : 'text-gray-600'}`}>{m.sub}</p>
                       )}
                       {m.when && (
-                        <p className={`text-sm mt-0.5 ${isFuture ? 'text-gray-400' : 'text-gray-700'}`}>
-                          {m.when}
-                        </p>
+                        <p className={`text-sm mt-0.5 ${isFuture ? 'text-gray-400' : 'text-gray-700'}`}>{m.when}</p>
                       )}
                       {isActive && index === 0 && (
-                        <button type="button" className="text-sm text-gray-900 underline mt-2">
-                          View more details
-                        </button>
+                        <button type="button" className="text-sm text-gray-900 underline mt-2">View more details</button>
                       )}
                       {isActive && index === 4 && !delivered && result.estimatedDelivery && (
                         <p className="text-sm text-gray-700 mt-1">By end of day</p>
@@ -396,13 +361,18 @@ export default function TrackingPage() {
               })}
             </div>
 
-            {/* Photos optional */}
-            {(setupImage || deliveredImage) && (
+            {(setupImage || transitImage || deliveredImage) && (
               <div className="mt-2 mb-6 grid gap-3">
                 {setupImage && (
                   <div>
                     <p className="text-xs font-semibold text-gray-500 mb-1">PACKAGE PHOTO</p>
                     <img src={setupImage} alt="Package" className="w-full max-h-48 object-cover rounded-lg border" />
+                  </div>
+                )}
+                {transitImage && (
+                  <div>
+                    <p className="text-xs font-semibold text-gray-500 mb-1">ON THE WAY</p>
+                    <img src={transitImage} alt="In transit" className="w-full max-h-48 object-cover rounded-lg border" />
                   </div>
                 )}
                 {deliveredImage && (
@@ -414,7 +384,6 @@ export default function TrackingPage() {
               </div>
             )}
 
-            {/* View travel history */}
             <button
               type="button"
               onClick={() => setShowHistory((v) => !v)}
@@ -455,7 +424,6 @@ export default function TrackingPage() {
             </button>
           </div>
 
-          {/* Ask FedEx FAB */}
           <Link
             to="/support"
             className="fixed bottom-6 right-5 z-20 flex items-center gap-2 bg-[#4D148C] text-white rounded-full px-5 py-3 shadow-lg font-semibold text-sm"
