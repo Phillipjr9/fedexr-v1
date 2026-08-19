@@ -1,6 +1,19 @@
 import { useEffect, useMemo, useState } from 'react';
 import { toast } from 'sonner';
+import { Button } from '@/components/ui/button';
 import { apiListActivity, apiListShipments, apiListUsers } from '@/lib/adminApi';
+import { Download } from 'lucide-react';
+
+function downloadCsv(filename: string, rows: string[][]) {
+  const csv = rows.map((r) => r.map((c) => `"${String(c ?? '').replace(/"/g, '""')}"`).join(',')).join('\n');
+  const blob = new Blob([csv], { type: 'text/csv;charset=utf-8' });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement('a');
+  a.href = url;
+  a.download = filename;
+  a.click();
+  URL.revokeObjectURL(url);
+}
 
 export default function AdminReports() {
   const [shipments, setShipments] = useState<any[]>([]);
@@ -23,11 +36,28 @@ export default function AdminReports() {
     return Object.entries(map).sort((a, b) => b[1] - a[1]);
   }, [shipments]);
 
+  const exportShipments = () => {
+    const rows = [
+      ['tracking_number', 'status', 'origin', 'destination', 'service', 'location', 'fee', 'package_size'],
+      ...shipments.map((s) => [
+        s.number, s.status, s.origin, s.destination, s.service, s.location,
+        s.shippingFee != null ? String(s.shippingFee) : '', s.packageSize || '',
+      ]),
+    ];
+    downloadCsv(`shipments-${new Date().toISOString().slice(0, 10)}.csv`, rows);
+    toast.success('Shipments CSV downloaded');
+  };
+
   return (
     <div className="space-y-6">
-      <div>
-        <h1 className="text-xl font-semibold">Reports</h1>
-        <p className="text-sm text-gray-500">Live totals from Neon (not invoices — tracking operations only).</p>
+      <div className="flex flex-wrap items-end justify-between gap-3">
+        <div>
+          <h1 className="text-xl font-semibold">Reports</h1>
+          <p className="text-sm text-gray-500">Live totals from Neon (tracking operations).</p>
+        </div>
+        <Button type="button" className="bg-[#4D148C] text-white" onClick={exportShipments}>
+          <Download className="h-4 w-4 mr-2" /> Export shipments CSV
+        </Button>
       </div>
       <div className="grid sm:grid-cols-3 gap-4">
         <div className="bg-white border rounded-lg p-5">
