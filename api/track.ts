@@ -148,12 +148,13 @@ export default async function handler(req: any, res: any) {
     if (!mapped) {
       return res.status(404).json({ found: false, error: 'Tracking not found', source: 'fedex' });
     }
+    const timeline = mapped.history || [];
     return res.status(200).json({
       found: true,
       source: 'fedex',
       ...mapped,
-      events: mapped.history || mapped.events || [],
-      history: mapped.history || mapped.events || [],
+      events: timeline,
+      history: timeline,
       shippingFee: null,
       packageSize: '',
       feePaid: true,
