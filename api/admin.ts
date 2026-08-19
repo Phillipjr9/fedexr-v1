@@ -84,6 +84,24 @@ export default async function handler(req: any, res: any) {
            ORDER BY s.updated_at DESC NULLS LAST, s.created_at DESC`,
           params
         );
+        const eventsByNumber: Record<string, any[]> = {};
+        if (rows.length) {
+          const ev = await c.query(
+            'SELECT tracking_number, event_time, created_at, location, status, details FROM shipment_events WHERE tracking_number = ANY($1) ORDER BY COALESCE(event_time, created_at) DESC',
+            [rows.map((r: any) => r.tracking_number)]
+          );
+          for (const e of ev.rows) {
+            const when = e.event_time || e.created_at;
+            (eventsByNumber[e.tracking_number] ||= []).push({
+              date: when ? new Date(when).toLocaleDateString() : '',
+              time: when ? new Date(when).toLocaleTimeString() : '',
+              location: e.location || '',
+              status: e.status || '',
+              completed: true,
+              details: e.details || '',
+            });
+          }
+        }
         return rows.map((r: any) => ({
           number: r.tracking_number,
           status: r.status,
@@ -92,7 +110,7 @@ export default async function handler(req: any, res: any) {
           service: r.service || r.service_id || '',
           estimatedDelivery: r.estimated_delivery_text || (r.estimated_delivery ? String(r.estimated_delivery) : ''),
           location: r.current_location || '',
-          history: [],
+          history: eventsByNumber[r.tracking_number] || [],
           hasSetupImage: r.has_setup_image,
           hasDeliveredImage: r.has_delivered_image,
         }));
