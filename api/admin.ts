@@ -21,7 +21,16 @@ function isAdmin(req: any) {
 }
 
 function dbUrl() {
-  return process.env.NEON_DATABASE_URL || process.env.DATABASE_URL || process.env.POSTGRES_URL || '';
+  return (
+    process.env.DATABASE_URL ||
+    process.env.NEON_DATABASE_URL ||
+    process.env.POSTGRES_URL ||
+    process.env.POSTGRES_PRISMA_URL ||
+    process.env.fedex_DATABASE_URL ||
+    process.env.fedex_POSTGRES_URL ||
+    process.env.fedex_POSTGRES_PRISMA_URL ||
+    ''
+  );
 }
 
 async function withDb(fn: (client: any) => Promise<any>) {
@@ -57,29 +66,6 @@ export default async function handler(req: any, res: any) {
       return res.status(200).json({ ok: true, username, secret: password });
     }
 
-    if (route.includes('events')) {
-      if (!isAdmin(req)) return res.status(401).json({ error: 'Unauthorized' });
-      if (req.method !== 'POST') return res.status(405).json({ error: 'Method not allowed' });
-      const number = String(body.number || '').trim();
-      const status = String(body.status || '').trim();
-      const location = String(body.location || '').trim();
-      const details = String(body.details || '').trim();
-      if (!number || !status || !location) return res.status(400).json({ error: 'Tracking number, status and location required' });
-      await withDb(async (c) => {
-        const exists = await c.query('SELECT 1 FROM shipments WHERE tracking_number = $1', [number]);
-        if (!exists.rowCount) throw new Error('Shipment not found');
-        await c.query(
-          'INSERT INTO shipment_events (tracking_number, location, status, details) VALUES ($1,$2,$3,$4)',
-          [number, location, status, details || 'Admin scan']
-        );
-        await c.query(
-          'UPDATE shipments SET status = $2, current_location = $3, updated_at = now() WHERE tracking_number = $1',
-          [number, status, location]
-        );
-      });
-      return res.status(200).json({ ok: true });
-    }
-
     if (req.method === 'GET') {
       const number = req.query?.number as string | undefined;
       const shipments = await withDb(async (c) => {
@@ -98,23 +84,6 @@ export default async function handler(req: any, res: any) {
            ORDER BY s.updated_at DESC NULLS LAST, s.created_at DESC`,
           params
         );
-        const eventsByNumber: Record<string, any[]> = {};
-        if (rows.length) {
-          const ev = await c.query(
-            'SELECT tracking_number, event_time, location, status, details FROM shipment_events WHERE tracking_number = ANY($1) ORDER BY event_time DESC',
-            [rows.map((r: any) => r.tracking_number)]
-          );
-          for (const e of ev.rows) {
-            (eventsByNumber[e.tracking_number] ||= []).push({
-              date: e.event_time ? new Date(e.event_time).toLocaleDateString() : '',
-              time: e.event_time ? new Date(e.event_time).toLocaleTimeString() : '',
-              location: e.location || '',
-              status: e.status || '',
-              completed: true,
-              details: e.details || '',
-            });
-          }
-        }
         return rows.map((r: any) => ({
           number: r.tracking_number,
           status: r.status,
@@ -123,7 +92,7 @@ export default async function handler(req: any, res: any) {
           service: r.service || r.service_id || '',
           estimatedDelivery: r.estimated_delivery_text || (r.estimated_delivery ? String(r.estimated_delivery) : ''),
           location: r.current_location || '',
-          history: eventsByNumber[r.tracking_number] || [],
+          history: [],
           hasSetupImage: r.has_setup_image,
           hasDeliveredImage: r.has_delivered_image,
         }));
@@ -144,6 +113,18 @@ export default async function handler(req: any, res: any) {
       return res.status(200).json({ ok: true });
     }
 
+    if (req.method === 'POST' && route.includes('events')) {
+      const number = String(body.number || '').trim();
+      const status = String(body.status || '').trim();
+      const location = String(body.location || '').trim();
+      if (!number || !status || !location) return res.status(400).json({ error: 'Tracking number, status and location required' });
+      await withDb(async (c) => {
+        await c.query('INSERT INTO shipment_events (tracking_number, location, status, details) VALUES ($1,$2,$3,$4)', [number, location, status, body.details || 'Admin scan']);
+        await c.query('UPDATE shipments SET status = $2, current_location = $3, updated_at = now() WHERE tracking_number = $1', [number, status, location]);
+      });
+      return res.status(200).json({ ok: true });
+    }
+
     if (req.method === 'POST') {
       const number = String(body.number || '').trim();
       if (!number) return res.status(400).json({ error: 'Tracking number required' });
@@ -151,21 +132,10 @@ export default async function handler(req: any, res: any) {
         await c.query(
           `INSERT INTO shipments (tracking_number, status, origin, destination, service, service_id, current_location, estimated_delivery_text, updated_at)
            VALUES ($1,$2,$3,$4,$5,$5,$6,$7,now())
-           ON CONFLICT (tracking_number) DO UPDATE SET
-             status = EXCLUDED.status,
-             origin = EXCLUDED.origin,
-             destination = EXCLUDED.destination,
-             service = EXCLUDED.service,
-             service_id = EXCLUDED.service_id,
-             current_location = EXCLUDED.current_location,
-             estimated_delivery_text = EXCLUDED.estimated_delivery_text,
-             updated_at = now()`,
+           ON CONFLICT (tracking_number) DO UPDATE SET status = EXCLUDED.status, origin = EXCLUDED.origin, destination = EXCLUDED.destination, service = EXCLUDED.service, service_id = EXCLUDED.service_id, current_location = EXCLUDED.current_location, estimated_delivery_text = EXCLUDED.estimated_delivery_text, updated_at = now()`,
           [number, body.status || 'In transit', body.origin || '', body.destination || '', body.service || '', body.location || '', body.estimatedDelivery || '']
         );
-        await c.query(
-          'INSERT INTO shipment_events (tracking_number, location, status, details) VALUES ($1,$2,$3,$4)',
-          [number, body.location || body.destination || '', body.status || 'In transit', 'Admin update']
-        );
+        await c.query('INSERT INTO shipment_events (tracking_number, location, status, details) VALUES ($1,$2,$3,$4)', [number, body.location || body.destination || '', body.status || 'In transit', 'Admin update']);
       });
       return res.status(200).json({ ok: true, number });
     }
