@@ -19,7 +19,14 @@ export function generateTrackingNumber() {
   return `39${now.slice(-4)}${rand}`.slice(0, 12);
 }
 
-export type Place = { label: string; display: string; city?: string; lat?: string; lon?: string };
+export type Place = {
+  label: string;
+  display: string;
+  city?: string;
+  short?: string;
+  lat?: string;
+  lon?: string;
+};
 
 export async function geocodePlaces(query: string): Promise<Place[]> {
   const q = query.trim();
@@ -31,5 +38,11 @@ export async function geocodePlaces(query: string): Promise<Place[]> {
 
 export async function fetchRoute(from: string, to: string) {
   const res = await fetch(`/api/geocode?from=${encodeURIComponent(from)}&to=${encodeURIComponent(to)}`);
-  return res.json();
+  return res.json() as Promise<{
+    from?: Place;
+    to?: Place;
+    stops: Place[];
+    miles?: number;
+    minutes?: number;
+  }>;
 }
