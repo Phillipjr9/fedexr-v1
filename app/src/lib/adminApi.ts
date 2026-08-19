@@ -188,3 +188,12 @@ export async function apiListHolds() {
   const json = await handleResponse(res, 'Could not load holds');
   return (json.holds || []) as any[];
 }
+
+export async function apiMarkPaid(number: string) {
+  const res = await fetch('/api/admin/shipments', {
+    method: 'POST',
+    headers: adminHeaders(),
+    body: JSON.stringify({ number, action: 'markPaid', markPaid: true }),
+  });
+  await handleResponse(res, 'Could not mark as paid');
+}
