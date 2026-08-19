@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useState } from 'react';
+import { useSearchParams } from 'react-router-dom';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { toast } from 'sonner';
@@ -6,7 +7,7 @@ import { FEDEX_SERVICES, generateTrackingNumber, geocodePlaces, fetchRoute, type
 import { HOLD_REASONS } from '@/lib/holdReasons';
 import { PACKAGE_SIZES, formatFee, quoteFee } from '@/lib/shippingRates';
 import { apiAddEvent, apiDeleteShipment, apiListShipments, apiSaveShipment, apiUploadImage, type ImageEventType } from '@/lib/adminApi';
-import { Camera, Pencil, Truck, X } from 'lucide-react';
+import { Camera, Pencil, Search, Truck, X } from 'lucide-react';
 
 const SCENES = [
   { id: 'label', label: 'Just created', rank: 0 },
@@ -16,6 +17,8 @@ const SCENES = [
   { id: 'delivered', label: 'Delivered', rank: 4 },
   { id: 'hold', label: 'Stop here', rank: 2 },
 ];
+
+const STATUS_FILTERS = ['All', 'Label created', 'In transit', 'Out for delivery', 'Delivered', 'Held', 'Exception'];
 
 function eta(service: string) {
   if (/same|first/i.test(service)) return 'Today · By end of day';
@@ -31,6 +34,14 @@ function fileToDataUrl(file: File): Promise<string> {
     reader.onerror = () => reject(new Error('Could not read image'));
     reader.readAsDataURL(file);
   });
+}
+
+function matchesFilter(status: string, filter: string) {
+  if (filter === 'All') return true;
+  const s = String(status || '').toLowerCase();
+  if (filter === 'Held') return s.includes('hold') || s.includes('held');
+  if (filter === 'In transit') return s.includes('transit') || s.includes('way') || s.includes('facility') || s.includes('pick');
+  return s.includes(filter.toLowerCase());
 }
 
 function PlaceInput({ value, onChange, placeholder }: { value: string; onChange: (v: string) => void; placeholder: string }) {
@@ -57,6 +68,7 @@ function PlaceInput({ value, onChange, placeholder }: { value: string; onChange:
 }
 
 export default function AdminShipments() {
+  const [params, setParams] = useSearchParams();
   const [origin, setOrigin] = useState('');
   const [destination, setDestination] = useState('');
   const [service, setService] = useState('FedEx Ground');
@@ -77,6 +89,8 @@ export default function AdminShipments() {
   const [editStatus, setEditStatus] = useState('In transit');
   const [editLocation, setEditLocation] = useState('');
   const [editDetails, setEditDetails] = useState('');
+  const [query, setQuery] = useState('');
+  const [statusFilter, setStatusFilter] = useState('All');
 
   const reasonText = holdReason === 'Other' ? holdOther.trim() : holdReason;
   const quoted = quoteFee(sizeId, service);
@@ -100,40 +114,41 @@ export default function AdminShipments() {
     if (!origin || !destination) return [];
     const stops = (route?.stops || []).map((s) => s.display || s.label);
     const mid = pin || stops[Math.floor(stops.length / 2)] || origin;
-    const out: { status: string; location: string; details: string; hoursAgo: number }[] = [
-      { status: 'Label created', location: origin, details: 'Shipping label created', hoursAgo: 40 },
+    const out: { status: string; location: string; details: string }[] = [
+      { status: 'Label created', location: origin, details: 'Shipping label created' },
     ];
-    if (scene.rank >= 1) out.push({ status: 'Picked up', location: origin, details: 'We have your package', hoursAgo: 32 });
+    if (scene.rank >= 1) out.push({ status: 'Picked up', location: origin, details: 'We have your package' });
     if (scene.rank >= 2) {
-      stops.slice(1, -1).forEach((stop, i) => out.push({ status: 'In transit', location: stop, details: 'On the driving route', hoursAgo: 20 - i * 5 }));
+      stops.slice(1, -1).forEach((stop) => out.push({ status: 'In transit', location: stop, details: 'On the driving route' }));
       out.push({
         status: scene.id === 'hold' ? 'Held at location' : 'In transit',
         location: mid,
         details: scene.id === 'hold' ? `Stopped: ${reasonText || 'Held at location'}` : 'On the way',
-        hoursAgo: 5,
       });
     }
-    if (scene.rank >= 3 && scene.id !== 'hold') out.push({ status: 'Out for delivery', location: destination, details: 'On a local truck', hoursAgo: 2 });
-    if (scene.rank >= 4 && scene.id !== 'hold') out.push({ status: 'Delivered', location: destination, details: 'Delivered', hoursAgo: 0.4 });
+    if (scene.rank >= 3 && scene.id !== 'hold') out.push({ status: 'Out for delivery', location: destination, details: 'On a local truck' });
+    if (scene.rank >= 4 && scene.id !== 'hold') out.push({ status: 'Delivered', location: destination, details: 'Delivered' });
     return out;
   }, [origin, destination, scene, route, pin, reasonText]);
 
-  const refresh = async () => { try { setShipments(await apiListShipments()); } catch (e: any) { toast.error(e.message); } };
-  useEffect(() => { refresh(); }, []);
+  const filtered = useMemo(() => {
+    const q = query.trim().toLowerCase();
+    return shipments.filter((s) => {
+      if (!matchesFilter(s.status, statusFilter)) return false;
+      if (!q) return true;
+      return [s.number, s.status, s.origin, s.destination, s.location].some((v) => String(v || '').toLowerCase().includes(q));
+    });
+  }, [shipments, query, statusFilter]);
 
-  const resetForm = () => {
-    setNumber(generateTrackingNumber());
-    setOrigin('');
-    setDestination('');
-    setPhoto('');
-    setPhotoKind('setup');
-    setEditing(false);
-    setEditStatus('In transit');
-    setEditLocation('');
-    setEditDetails('');
-    setScene(SCENES[2]);
-    setManualFee('');
+  const refresh = async () => {
+    try {
+      setShipments(await apiListShipments());
+    } catch (e: any) {
+      toast.error(e.message);
+    }
   };
+
+  useEffect(() => { refresh(); }, []);
 
   const loadForEdit = (s: any) => {
     setEditing(true);
@@ -150,14 +165,37 @@ export default function AdminShipments() {
     if (st.includes('deliver')) setPhotoKind('delivered');
     else if (st.includes('transit') || st.includes('way') || st.includes('out for')) setPhotoKind('transit');
     else setPhotoKind('setup');
+    setParams({ edit: s.number });
     window.scrollTo({ top: 0, behavior: 'smooth' });
+  };
+
+  useEffect(() => {
+    const editNum = params.get('edit');
+    if (!editNum || !shipments.length) return;
+    const found = shipments.find((s) => String(s.number).toLowerCase() === editNum.toLowerCase());
+    if (found && (!editing || number !== found.number)) loadForEdit(found);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [params, shipments]);
+
+  const resetForm = () => {
+    setNumber(generateTrackingNumber());
+    setOrigin('');
+    setDestination('');
+    setPhoto('');
+    setPhotoKind('setup');
+    setEditing(false);
+    setEditStatus('In transit');
+    setEditLocation('');
+    setEditDetails('');
+    setScene(SCENES[2]);
+    setManualFee('');
+    setParams({});
   };
 
   const onPickPhoto = async (file?: File | null) => {
     if (!file) return;
     try {
-      const dataUrl = await fileToDataUrl(file);
-      setPhoto(dataUrl);
+      setPhoto(await fileToDataUrl(file));
     } catch {
       toast.error('Could not read that image');
     }
@@ -216,16 +254,9 @@ export default function AdminShipments() {
         skipEvent: true,
       });
       if (editStatus && editLocation) {
-        await apiAddEvent({
-          number,
-          status: editStatus,
-          location: editLocation,
-          details: editDetails || undefined,
-        });
+        await apiAddEvent({ number, status: editStatus, location: editLocation, details: editDetails || undefined });
       }
-      if (photo) {
-        await apiUploadImage(number, photo, photoKind);
-      }
+      if (photo) await apiUploadImage(number, photo, photoKind);
       toast.success(`Updated ${number}`);
       resetForm();
       await refresh();
@@ -238,9 +269,8 @@ export default function AdminShipments() {
 
   const uploadOnly = async (s: any, kind: ImageEventType, file: File) => {
     try {
-      const dataUrl = await fileToDataUrl(file);
-      await apiUploadImage(s.number, dataUrl, kind);
-      toast.success(`Photo saved for ${s.number} (${kind})`);
+      await apiUploadImage(s.number, await fileToDataUrl(file), kind);
+      toast.success(`Photo saved for ${s.number}`);
       refresh();
     } catch (e: any) {
       toast.error(e.message || 'Upload failed');
@@ -262,7 +292,7 @@ export default function AdminShipments() {
           <p className="font-mono text-lg">{number}</p>
           <p className="text-sm text-[#4D148C] font-semibold">{formatFee(Number.isFinite(fee) ? fee : 0)}</p>
           {editing && (
-            <Button type="button" variant="outline" className="mt-2" onClick={resetForm}>
+            <Button type="button" variant="outline" className="mt-2 text-gray-900" onClick={resetForm}>
               <X className="h-4 w-4 mr-1" /> Cancel edit
             </Button>
           )}
@@ -293,7 +323,7 @@ export default function AdminShipments() {
           <p className="text-lg font-semibold">{formatFee(quoted)}</p>
         </div>
         <div className="flex-1 min-w-[160px]">
-          <label className="block text-xs text-gray-500 mb-1">Manual fee (leave blank to use quote)</label>
+          <label className="block text-xs text-gray-500 mb-1">Manual fee</label>
           <Input type="number" min="0" step="0.01" value={manualFee} onChange={(e) => setManualFee(e.target.value)} placeholder={String(quoted)} />
         </div>
       </div>
@@ -315,10 +345,7 @@ export default function AdminShipments() {
               <Input value={editLocation} onChange={(e) => setEditLocation(e.target.value)} placeholder="City, State" />
             </div>
           </div>
-          <div>
-            <label className="text-xs text-gray-500">Details (optional)</label>
-            <Input value={editDetails} onChange={(e) => setEditDetails(e.target.value)} placeholder="On the way / We have your package" />
-          </div>
+          <Input value={editDetails} onChange={(e) => setEditDetails(e.target.value)} placeholder="Details (optional)" />
         </div>
       ) : (
         <>
@@ -340,7 +367,6 @@ export default function AdminShipments() {
           </div>
           {scene.id === 'hold' && (
             <div className="bg-amber-50 border border-amber-200 rounded-xl p-5 space-y-3">
-              <p className="font-medium text-sm">Why was this stopped?</p>
               <select className="w-full border rounded h-10 px-2 bg-white" value={holdReason} onChange={(e) => setHoldReason(e.target.value)}>
                 {HOLD_REASONS.map((r) => <option key={r}>{r}</option>)}
               </select>
@@ -348,7 +374,6 @@ export default function AdminShipments() {
             </div>
           )}
           <div className="bg-white border rounded-xl p-5">
-            <div className="flex items-center gap-2 mb-4 text-sm font-medium">Preview</div>
             <ol className="space-y-3">
               {story.map((ev, i) => (
                 <li key={i} className="flex gap-3 text-sm">
@@ -366,15 +391,9 @@ export default function AdminShipments() {
 
       <div className="bg-white border rounded-xl p-5 space-y-3">
         <p className="font-medium text-sm flex items-center gap-2"><Camera className="h-4 w-4" /> Package photo</p>
-        <p className="text-xs text-gray-500">Upload anytime — label, on the way, or delivered. Shown on public tracking.</p>
         <div className="flex flex-wrap gap-2">
           {(['setup', 'transit', 'delivered'] as ImageEventType[]).map((k) => (
-            <button
-              key={k}
-              type="button"
-              onClick={() => setPhotoKind(k)}
-              className={`px-3 py-1.5 rounded-full text-xs font-semibold border ${photoKind === k ? 'bg-[#4D148C] text-white border-[#4D148C]' : 'bg-white text-gray-700'}`}
-            >
+            <button key={k} type="button" onClick={() => setPhotoKind(k)} className={`px-3 py-1.5 rounded-full text-xs font-semibold border ${photoKind === k ? 'bg-[#4D148C] text-white border-[#4D148C]' : 'bg-white text-gray-700'}`}>
               {k === 'setup' ? 'Label / pickup' : k === 'transit' ? 'On the way' : 'Delivered'}
             </button>
           ))}
@@ -383,19 +402,26 @@ export default function AdminShipments() {
         {photo && <img src={photo} alt="Preview" className="max-h-40 rounded-lg border" />}
       </div>
 
-      <Button
-        disabled={busy}
-        className="bg-[#4D148C] text-white"
-        onClick={editing ? saveEdit : publish}
-      >
+      <Button disabled={busy} className="bg-[#4D148C] text-white" onClick={editing ? saveEdit : publish}>
         <Truck className="h-4 w-4 mr-2" />
         {busy ? 'Saving…' : editing ? `Save changes · ${formatFee(Number.isFinite(fee) ? fee : 0)}` : `Make it live · ${formatFee(Number.isFinite(fee) ? fee : 0)}`}
       </Button>
 
-      <div className="bg-white border rounded-xl p-5">
-        <h2 className="font-semibold mb-3">Live now</h2>
+      <div className="bg-white border rounded-xl p-5 space-y-4">
+        <div className="flex flex-wrap items-center justify-between gap-3">
+          <h2 className="font-semibold">Live now ({filtered.length})</h2>
+          <div className="flex flex-wrap gap-2 items-center">
+            <div className="relative">
+              <Search className="absolute left-2.5 top-1/2 -translate-y-1/2 h-4 w-4 text-gray-400" />
+              <Input className="pl-8 w-48" placeholder="Search tracking…" value={query} onChange={(e) => setQuery(e.target.value)} />
+            </div>
+            <select className="border rounded h-9 px-2 text-sm" value={statusFilter} onChange={(e) => setStatusFilter(e.target.value)}>
+              {STATUS_FILTERS.map((f) => <option key={f}>{f}</option>)}
+            </select>
+          </div>
+        </div>
         <ul className="divide-y text-sm">
-          {shipments.map((s) => (
+          {filtered.map((s) => (
             <li key={s.number} className="py-4 space-y-3">
               <div className="flex flex-wrap justify-between gap-3">
                 <div>
@@ -407,16 +433,10 @@ export default function AdminShipments() {
                   <Button type="button" variant="outline" className="text-gray-900 border-gray-300" onClick={() => loadForEdit(s)}>
                     <Pencil className="h-4 w-4 mr-1" /> Edit
                   </Button>
-                  <Button
-                    type="button"
-                    variant="outline"
-                    className="text-red-700 border-red-200"
-                    onClick={async () => {
-                      if (!confirm('Delete this shipment?')) return;
-                      await apiDeleteShipment(s.number);
-                      refresh();
-                    }}
-                  >
+                  <Button type="button" variant="outline" className="text-red-700 border-red-200" onClick={async () => {
+                    if (!confirm('Delete this shipment?')) return;
+                    try { await apiDeleteShipment(s.number); refresh(); } catch (e: any) { toast.error(e.message); }
+                  }}>
                     Remove
                   </Button>
                 </div>
@@ -424,30 +444,20 @@ export default function AdminShipments() {
               <div className="flex flex-wrap gap-2 items-center">
                 <span className="text-xs text-gray-500">Add photo:</span>
                 {(['setup', 'transit', 'delivered'] as ImageEventType[]).map((k) => (
-                  <label key={k} className="inline-flex items-center gap-1 text-xs border rounded-lg px-2 py-1.5 cursor-pointer hover:bg-purple-50">
+                  <label key={k} className="inline-flex items-center gap-1 text-xs border rounded-lg px-2 py-1.5 cursor-pointer hover:bg-purple-50 text-gray-800">
                     <Camera className="h-3.5 w-3.5" />
                     {k === 'setup' ? 'Label' : k === 'transit' ? 'On the way' : 'Delivered'}
-                    <input
-                      type="file"
-                      accept="image/*"
-                      className="sr-only"
-                      onChange={(e) => {
-                        const f = e.target.files?.[0];
-                        if (f) uploadOnly(s, k, f);
-                        e.target.value = '';
-                      }}
-                    />
+                    <input type="file" accept="image/*" className="sr-only" onChange={(e) => {
+                      const f = e.target.files?.[0];
+                      if (f) uploadOnly(s, k, f);
+                      e.target.value = '';
+                    }} />
                   </label>
                 ))}
-                <span className="text-xs text-gray-400">
-                  {s.hasSetupImage ? '· has label photo' : ''}
-                  {s.hasTransitImage ? ' · has on-the-way photo' : ''}
-                  {s.hasDeliveredImage ? ' · has delivery photo' : ''}
-                </span>
               </div>
             </li>
           ))}
-          {!shipments.length && <li className="py-6 text-gray-500">No live shipments yet.</li>}
+          {!filtered.length && <li className="py-6 text-gray-500">No shipments match this search.</li>}
         </ul>
       </div>
     </div>
