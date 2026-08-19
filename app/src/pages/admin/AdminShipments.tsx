@@ -36,6 +36,30 @@ function fileToDataUrl(file: File): Promise<string> {
   });
 }
 
+/** Resize & JPEG-compress so upload stays under Vercel body limits */
+async function compressImage(file: File, maxSide = 1200, quality = 0.72): Promise<string> {
+  const raw = await fileToDataUrl(file);
+  if (typeof document === 'undefined') return raw;
+  return new Promise((resolve) => {
+    const img = new Image();
+    img.onload = () => {
+      let { width, height } = img;
+      const scale = Math.min(1, maxSide / Math.max(width, height));
+      width = Math.round(width * scale);
+      height = Math.round(height * scale);
+      const canvas = document.createElement('canvas');
+      canvas.width = width;
+      canvas.height = height;
+      const ctx = canvas.getContext('2d');
+      if (!ctx) { resolve(raw); return; }
+      ctx.drawImage(img, 0, 0, width, height);
+      try { resolve(canvas.toDataURL('image/jpeg', quality)); } catch { resolve(raw); }
+    };
+    img.onerror = () => resolve(raw);
+    img.src = raw;
+  });
+}
+
 function matchesFilter(status: string, filter: string) {
   if (filter === 'All') return true;
   const s = String(status || '').toLowerCase();
@@ -165,11 +189,7 @@ export default function AdminShipments() {
   }, [shipments, query, statusFilter]);
 
   const refresh = async () => {
-    try {
-      setShipments(await apiListShipments());
-    } catch (e: any) {
-      toast.error(e.message);
-    }
+    try { setShipments(await apiListShipments()); } catch (e: any) { toast.error(e.message); }
   };
 
   useEffect(() => { refresh(); }, []);
@@ -221,8 +241,11 @@ export default function AdminShipments() {
 
   const onPickPhoto = async (file?: File | null) => {
     if (!file) return;
+    if (!file.type.startsWith('image/')) { toast.error('Please choose an image file'); return; }
     try {
-      setPhoto(await fileToDataUrl(file));
+      const dataUrl = await compressImage(file);
+      setPhoto(dataUrl);
+      toast.success('Photo ready — it will upload when you publish');
     } catch {
       toast.error('Could not read that image');
     }
@@ -252,10 +275,17 @@ export default function AdminShipments() {
         });
       }
       if (photo) {
-        const kind: ImageEventType = scene.rank >= 4 ? 'delivered' : scene.rank >= 2 ? 'transit' : 'setup';
-        await apiUploadImage(number, photo, kind);
+        const kind: ImageEventType = photoKind || (scene.rank >= 4 ? 'delivered' : scene.rank >= 2 ? 'transit' : 'setup');
+        try {
+          await apiUploadImage(number, photo, kind);
+          toast.success(`${number} is live · photo saved · ${formatFee(fee)}`);
+        } catch (imgErr: any) {
+          toast.success(`${number} is live · ${formatFee(fee)}`);
+          toast.error(imgErr?.message || 'Shipment saved but photo upload failed — use Add photo on the list');
+        }
+      } else {
+        toast.success(`${number} is live · ${formatFee(fee)}`);
       }
-      toast.success(`${number} is live · ${formatFee(fee)}`);
       resetForm();
       await refresh();
     } catch (e: any) {
@@ -269,34 +299,29 @@ export default function AdminShipments() {
     try {
       const sizeLabel = PACKAGE_SIZES.find((s) => s.id === sizeId)?.label || sizeId;
       await apiSaveShipment({
-        number,
-        status: editStatus || 'In transit',
-        origin,
-        destination,
-        service,
-        estimatedDelivery: eta(service),
-        location: editLocation || origin,
-        shippingFee: String(Number.isFinite(fee) ? fee : 0),
-        packageSize: sizeLabel,
-        skipEvent: true,
+        number, status: editStatus || 'In transit', origin, destination, service,
+        estimatedDelivery: eta(service), location: editLocation || origin,
+        shippingFee: String(Number.isFinite(fee) ? fee : 0), packageSize: sizeLabel, skipEvent: true,
       });
       if (editStatus && editLocation) {
         await apiAddEvent({ number, status: editStatus, location: editLocation, details: editDetails || undefined });
       }
-      if (photo) await apiUploadImage(number, photo, photoKind);
+      if (photo) {
+        try { await apiUploadImage(number, photo, photoKind); }
+        catch (imgErr: any) { toast.error(imgErr?.message || 'Photo upload failed'); }
+      }
       toast.success(`Updated ${number}`);
       resetForm();
       await refresh();
     } catch (e: any) {
       toast.error(e.message || 'Update failed');
-    } finally {
-      setBusy(false);
-    }
+    } finally { setBusy(false); }
   };
 
   const uploadOnly = async (s: any, kind: ImageEventType, file: File) => {
     try {
-      await apiUploadImage(s.number, await fileToDataUrl(file), kind);
+      if (!file.type.startsWith('image/')) { toast.error('Please choose an image file'); return; }
+      await apiUploadImage(s.number, await compressImage(file), kind);
       toast.success(`Photo saved for ${s.number}`);
       refresh();
     } catch (e: any) {
@@ -395,9 +420,7 @@ export default function AdminShipments() {
                 </div>
               )}
             </div>
-            <p className="text-xs text-gray-500">
-              Check every city you want on this shipment’s path. Use <strong>Set pin</strong> for the current location on the story.
-            </p>
+            <p className="text-xs text-gray-500">Check cities on the path. Use Set pin for current location.</p>
             {!routing && !(route?.stops || []).length && origin && destination && (
               <p className="text-sm text-amber-700">No route yet — try clearer From/To addresses (city + state).</p>
             )}
@@ -411,39 +434,20 @@ export default function AdminShipments() {
                 return (
                   <li key={`${label}-${idx}`} className={`flex flex-wrap items-center gap-2 rounded-lg border px-3 py-2 text-sm ${isPin ? 'border-[#4D148C] bg-purple-50' : 'bg-gray-50'}`}>
                     <label className="flex items-center gap-2 flex-1 min-w-0 cursor-pointer">
-                      <input
-                        type="checkbox"
-                        checked={checked}
-                        onChange={() => {
-                          setSelectedStops((prev) =>
-                            prev.includes(label) ? prev.filter((x) => x !== label) : [...prev, label]
-                          );
-                        }}
-                      />
-                      <span className="truncate">
-                        <span className="text-xs text-gray-400 mr-1">{endLabel}</span>
-                        {short}
-                      </span>
+                      <input type="checkbox" checked={checked} onChange={() => {
+                        setSelectedStops((prev) => prev.includes(label) ? prev.filter((x) => x !== label) : [...prev, label]);
+                      }} />
+                      <span className="truncate"><span className="text-xs text-gray-400 mr-1">{endLabel}</span>{short}</span>
                     </label>
-                    <button
-                      type="button"
-                      className={`text-xs font-semibold px-2 py-1 rounded border ${isPin ? 'bg-[#4D148C] text-white border-[#4D148C]' : 'bg-white text-gray-700'}`}
-                      onClick={() => {
-                        setPin(label);
-                        if (!selectedStops.includes(label)) setSelectedStops((prev) => [...prev, label]);
-                      }}
-                    >
-                      {isPin ? 'Current pin' : 'Set pin'}
-                    </button>
+                    <button type="button" className={`text-xs font-semibold px-2 py-1 rounded border ${isPin ? 'bg-[#4D148C] text-white border-[#4D148C]' : 'bg-white text-gray-700'}`} onClick={() => {
+                      setPin(label);
+                      if (!selectedStops.includes(label)) setSelectedStops((prev) => [...prev, label]);
+                    }}>{isPin ? 'Current pin' : 'Set pin'}</button>
                   </li>
                 );
               })}
             </ol>
-            {pathStops.length > 0 && (
-              <p className="text-xs text-gray-600 border-t pt-2">
-                Active path: {pathStops.join(' → ')}
-              </p>
-            )}
+            {pathStops.length > 0 && <p className="text-xs text-gray-600 border-t pt-2">Active path: {pathStops.join(' → ')}</p>}
           </div>
 
           {scene.id === 'hold' && (
@@ -472,6 +476,7 @@ export default function AdminShipments() {
 
       <div className="bg-white border rounded-xl p-5 space-y-3">
         <p className="font-medium text-sm flex items-center gap-2"><Camera className="h-4 w-4" /> Package photo</p>
+        <p className="text-xs text-gray-500">Choose a photo type, then pick an image. It is compressed and saved when you publish.</p>
         <div className="flex flex-wrap gap-2">
           {(['setup', 'transit', 'delivered'] as ImageEventType[]).map((k) => (
             <button key={k} type="button" onClick={() => setPhotoKind(k)} className={`px-3 py-1.5 rounded-full text-xs font-semibold border ${photoKind === k ? 'bg-[#4D148C] text-white border-[#4D148C]' : 'bg-white text-gray-700'}`}>
@@ -479,8 +484,13 @@ export default function AdminShipments() {
             </button>
           ))}
         </div>
-        <Input type="file" accept="image/*" onChange={(e) => onPickPhoto(e.target.files?.[0])} />
-        {photo && <img src={photo} alt="Preview" className="max-h-40 rounded-lg border" />}
+        <Input type="file" accept="image/*" capture="environment" onChange={(e) => onPickPhoto(e.target.files?.[0])} />
+        {photo && (
+          <div className="space-y-1">
+            <img src={photo} alt="Preview" className="max-h-40 rounded-lg border" />
+            <button type="button" className="text-xs text-red-600 underline" onClick={() => setPhoto('')}>Remove photo</button>
+          </div>
+        )}
       </div>
 
       <Button disabled={busy} className="bg-[#4D148C] text-white" onClick={editing ? saveEdit : publish}>
@@ -517,9 +527,7 @@ export default function AdminShipments() {
                   <Button type="button" variant="outline" className="text-red-700 border-red-200" onClick={async () => {
                     if (!confirm('Delete this shipment?')) return;
                     try { await apiDeleteShipment(s.number); refresh(); } catch (e: any) { toast.error(e.message); }
-                  }}>
-                    Remove
-                  </Button>
+                  }}>Remove</Button>
                 </div>
               </div>
               <div className="flex flex-wrap gap-2 items-center">
