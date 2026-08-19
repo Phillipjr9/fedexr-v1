@@ -19,9 +19,9 @@ export default async function handler(req: any, res: any) {
   const number = String(body.number || body.trackingNumber || '').trim();
   if (!number) return res.status(400).json({ error: 'Tracking number required' });
 
-  // Minimal checkout fields (demo / offline capture — no card data stored)
   const name = String(body.name || '').trim();
   const email = String(body.email || '').trim();
+  const offline = body.offline === true || body.offline === 'true' || body.method === 'offline';
   if (!name || !email || !email.includes('@')) {
     return res.status(400).json({ error: 'Enter payer name and a valid email' });
   }
@@ -34,16 +34,21 @@ export default async function handler(req: any, res: any) {
       await c.query('ALTER TABLE shipments ADD COLUMN IF NOT EXISTS fee_paid_at TIMESTAMPTZ');
       await c.query('ALTER TABLE shipments ADD COLUMN IF NOT EXISTS fee_payer_email TEXT');
       await c.query('ALTER TABLE shipments ADD COLUMN IF NOT EXISTS fee_payer_name TEXT');
+      await c.query('ALTER TABLE shipments ADD COLUMN IF NOT EXISTS collect_payment BOOLEAN DEFAULT false');
+      await c.query('ALTER TABLE shipments ADD COLUMN IF NOT EXISTS payment_instructions TEXT');
 
       const ship = await c.query(
-        `SELECT tracking_number, shipping_fee, fee_paid FROM shipments
-         WHERE lower(tracking_number) = lower($1) LIMIT 1`,
+        `SELECT tracking_number, shipping_fee, fee_paid, collect_payment
+         FROM shipments WHERE lower(tracking_number) = lower($1) LIMIT 1`,
         [number]
       );
       if (!ship.rowCount) throw new Error('Shipment not found');
       const row = ship.rows[0];
       const fee = row.shipping_fee != null ? Number(row.shipping_fee) : 0;
 
+      if (!row.collect_payment) {
+        throw new Error('This shipment does not require online/offline payment collection.');
+      }
       if (!fee || fee <= 0) {
         return { ok: true, alreadyPaid: true, shippingFee: 0, message: 'No shipping fee due for this package.' };
       }
@@ -58,27 +63,27 @@ export default async function handler(req: any, res: any) {
         [number, email, name]
       );
 
+      const detail = offline
+        ? `Offline payment reported by ${name} ($${fee.toFixed(2)}) — verify if needed`
+        : `Shipping fee of $${fee.toFixed(2)} paid by ${name}`;
+
       try {
         await c.query(
           `INSERT INTO shipment_events (tracking_number, location, status, details)
            VALUES ($1, $2, $3, $4)`,
-          [
-            row.tracking_number,
-            'Online',
-            'Payment received',
-            `Shipping fee of $${fee.toFixed(2)} paid by ${name}`,
-          ]
+          [row.tracking_number, offline ? 'Offline' : 'Online', 'Payment received', detail]
         );
-      } catch {
-        /* events optional */
-      }
+      } catch { /* optional */ }
 
       return {
         ok: true,
         alreadyPaid: false,
         shippingFee: fee,
         paid: true,
-        message: 'Payment successful. Tracking can now continue.',
+        offline,
+        message: offline
+          ? 'Offline payment recorded. Tracking can continue. Admin may verify the transfer.'
+          : 'Payment successful. Tracking can now continue.',
       };
     });
 
