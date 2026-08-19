@@ -5,8 +5,18 @@ import { Input } from '@/components/ui/input';
 import { toast } from 'sonner';
 import { FEDEX_SERVICES, generateTrackingNumber, geocodePlaces, fetchRoute, type Place } from '@/lib/places';
 import { PACKAGE_SIZES, formatFee, quoteFee } from '@/lib/shippingRates';
-import { apiAddEvent, apiDeleteShipment, apiListShipments, apiSaveShipment, apiUploadImage, apiMarkPaid, apiGetImage, type ImageEventType } from '@/lib/adminApi';
-import { Pencil, ImageIcon } from 'lucide-react';
+import {
+  apiAddEvent,
+  apiDeleteShipment,
+  apiListShipments,
+  apiSaveShipment,
+  apiUploadImage,
+  apiMarkPaid,
+  apiListImages,
+  apiDeleteImage,
+  MIN_PACKAGE_PHOTOS,
+} from '@/lib/adminApi';
+import { Pencil, ImageIcon, Trash2 } from 'lucide-react';
 
 async function compressImage(file: File, maxEdge = 1200, quality = 0.72): Promise<Blob> {
   if (!file.type.startsWith('image/')) return file;
@@ -55,6 +65,8 @@ type ShipmentRow = {
   hasDeliveredImage?: boolean;
 };
 
+type GalleryImage = { id: number; eventType: string; dataUrl: string };
+
 const DEFAULT_PAYMENT_INSTRUCTIONS =
   'Pay via Zelle / bank transfer to the account provided by support. Include your tracking number in the memo. After payment, submit your name and email on the tracking page so we can unlock progress.';
 
@@ -80,14 +92,15 @@ export default function AdminShipments() {
   const [selectedStops, setSelectedStops] = useState<Record<number, boolean>>({});
   const [loadingRoute, setLoadingRoute] = useState(false);
   const [saving, setSaving] = useState(false);
-  const [photoKind, setPhotoKind] = useState<ImageEventType>('setup');
   const [uploading, setUploading] = useState(false);
-  const [previewUrl, setPreviewUrl] = useState<string | null>(null);
-  const [previewLoading, setPreviewLoading] = useState(false);
+  const [gallery, setGallery] = useState<GalleryImage[]>([]);
+  const [galleryLoading, setGalleryLoading] = useState(false);
 
   const serviceLabel = FEDEX_SERVICES.find((s) => s.id === serviceId)?.label || serviceId;
   const quoted = useMemo(() => quoteFee(packageSize, serviceLabel), [packageSize, serviceLabel]);
   const feeNum = manualFee.trim() ? Number(manualFee) : quoted;
+  const photoCount = gallery.length;
+  const photosOk = photoCount >= MIN_PACKAGE_PHOTOS;
 
   async function refresh() {
     setLoading(true);
@@ -98,6 +111,18 @@ export default function AdminShipments() {
       toast.error(e.message || 'Could not load shipments');
     } finally {
       setLoading(false);
+    }
+  }
+
+  async function refreshGallery(number: string) {
+    setGalleryLoading(true);
+    try {
+      const { images } = await apiListImages(number);
+      setGallery(images);
+    } catch {
+      setGallery([]);
+    } finally {
+      setGalleryLoading(false);
     }
   }
 
@@ -112,18 +137,6 @@ export default function AdminShipments() {
       if (s) loadForEdit(s);
     }
   }, [searchParams, list]);
-
-  async function loadPreview(number: string, kind: ImageEventType) {
-    setPreviewLoading(true);
-    try {
-      const url = await apiGetImage(number, kind);
-      setPreviewUrl(url);
-    } catch {
-      setPreviewUrl(null);
-    } finally {
-      setPreviewLoading(false);
-    }
-  }
 
   function loadForEdit(s: ShipmentRow) {
     setEditing(s.number);
@@ -140,9 +153,8 @@ export default function AdminShipments() {
     setCollectPayment(!!s.collectPayment);
     if (s.paymentInstructions) setPaymentInstructions(s.paymentInstructions);
     setEditMessage('');
-    setPhotoKind('setup');
-    setPreviewUrl(null);
-    loadPreview(s.number, 'setup');
+    setGallery([]);
+    refreshGallery(s.number);
   }
 
   async function loadRouteStops() {
@@ -203,9 +215,9 @@ export default function AdminShipments() {
           details: 'Departed facility',
         });
       }
-      toast.success(`Created ${number} — you can upload photos below anytime`);
+      toast.success(`Created ${number} — upload at least ${MIN_PACKAGE_PHOTOS} package photos below`);
       setEditing(number);
-      setPreviewUrl(null);
+      setGallery([]);
       await refresh();
     } catch (e: any) {
       toast.error(e.message || 'Create failed');
@@ -216,6 +228,10 @@ export default function AdminShipments() {
 
   async function saveEdit() {
     if (!editing) return;
+    if (!photosOk) {
+      toast.error(`Upload at least ${MIN_PACKAGE_PHOTOS} package photos (${photoCount}/${MIN_PACKAGE_PHOTOS})`);
+      return;
+    }
     setSaving(true);
     try {
       const service = FEDEX_SERVICES.find((s) => s.id === serviceId)?.label || serviceId;
@@ -252,37 +268,58 @@ export default function AdminShipments() {
     }
   }
 
-  async function onUpload(e: React.ChangeEvent<HTMLInputElement>) {
-    const file = e.target.files?.[0];
-    if (!file || !editing) {
+  async function onUploadMany(e: React.ChangeEvent<HTMLInputElement>) {
+    const files = Array.from(e.target.files || []);
+    if (!files.length || !editing) {
       if (!editing) toast.error('Open a shipment with Edit first, then upload');
       return;
     }
-    if (!file.type.startsWith('image/')) {
-      toast.error('Please choose an image file');
+    const imageFiles = files.filter((f) => f.type.startsWith('image/'));
+    if (!imageFiles.length) {
+      toast.error('Please choose image files');
       e.target.value = '';
       return;
     }
     setUploading(true);
+    let ok = 0;
+    let lastCount = photoCount;
     try {
-      const blob = await compressImage(file);
-      const dataUrl = await blobToDataUrl(blob);
-      if (!dataUrl.startsWith('data:')) throw new Error('Could not prepare image');
-      await apiUploadImage(editing, dataUrl, photoKind);
-      toast.success(
-        photoKind === 'setup'
-          ? 'Package photo uploaded (shows on tracking anytime)'
-          : photoKind === 'transit'
-            ? 'In-transit photo uploaded'
-            : 'Delivered photo uploaded'
-      );
-      setPreviewUrl(dataUrl);
+      for (const file of imageFiles) {
+        try {
+          const blob = await compressImage(file);
+          const dataUrl = await blobToDataUrl(blob);
+          if (!dataUrl.startsWith('data:')) continue;
+          const res = await apiUploadImage(editing, dataUrl, 'setup');
+          ok += 1;
+          lastCount = res.count ?? lastCount + 1;
+        } catch (err: any) {
+          toast.error(err.message || `Failed: ${file.name}`);
+        }
+      }
+      await refreshGallery(editing);
+      if (ok) {
+        const meets = lastCount >= MIN_PACKAGE_PHOTOS;
+        toast.success(
+          meets
+            ? `Uploaded ${ok} photo(s). Total ${lastCount} — minimum met.`
+            : `Uploaded ${ok} photo(s). ${lastCount}/${MIN_PACKAGE_PHOTOS} — add ${MIN_PACKAGE_PHOTOS - lastCount} more.`
+        );
+      }
       await refresh();
-    } catch (err: any) {
-      toast.error(err.message || 'Upload failed');
     } finally {
       setUploading(false);
       e.target.value = '';
+    }
+  }
+
+  async function removePhoto(id: number) {
+    if (!editing) return;
+    try {
+      await apiDeleteImage(id);
+      await refreshGallery(editing);
+      toast.success('Photo removed');
+    } catch (e: any) {
+      toast.error(e.message || 'Could not delete');
     }
   }
 
@@ -304,7 +341,7 @@ export default function AdminShipments() {
       <div>
         <h1 className="text-xl font-semibold text-gray-900">Shipments</h1>
         <p className="text-sm text-gray-500">
-          Create labels, set fees, require payment, upload package photos (before or after payment).
+          Create labels, set fees, and upload at least {MIN_PACKAGE_PHOTOS} package photos (before or after payment).
         </p>
       </div>
 
@@ -409,45 +446,59 @@ export default function AdminShipments() {
             {saving ? 'Saving…' : 'Save update'}
           </Button>
 
-          {/* Photos — independent of payment */}
           <div className="border-t pt-4 space-y-3">
             <div className="flex items-start gap-2">
               <ImageIcon className="h-5 w-5 text-[#4D148C] mt-0.5 shrink-0" />
-              <div>
-                <p className="font-medium text-sm text-gray-900">Package photos</p>
+              <div className="flex-1">
+                <p className="font-medium text-sm text-gray-900">Package photos (required)</p>
                 <p className="text-xs text-gray-500">
-                  Upload anytime — before or after the customer pays. Photos appear on the public tracking page.
+                  Upload at least {MIN_PACKAGE_PHOTOS} photos. You can add more anytime — before or after payment.
+                </p>
+                <p className={`mt-1 text-sm font-semibold ${photosOk ? 'text-green-700' : 'text-amber-700'}`}>
+                  {photoCount}/{MIN_PACKAGE_PHOTOS} minimum{photosOk ? ' · Ready' : ` · ${Math.max(0, MIN_PACKAGE_PHOTOS - photoCount)} more needed`}
                 </p>
               </div>
             </div>
-            <div className="flex flex-wrap gap-2 items-center">
-              <select
-                className="border rounded h-10 px-2 text-sm"
-                value={photoKind}
-                onChange={(e) => {
-                  const k = e.target.value as ImageEventType;
-                  setPhotoKind(k);
-                  if (editing) loadPreview(editing, k);
-                }}
-              >
-                <option value="setup">Package photo (label / pickup)</option>
-                <option value="transit">In transit photo</option>
-                <option value="delivered">Delivered photo</option>
-              </select>
-              <label className="inline-flex items-center gap-2 text-sm border rounded-md px-3 h-10 cursor-pointer hover:bg-gray-50 bg-white">
-                <input type="file" accept="image/*" className="hidden" onChange={onUpload} disabled={uploading} />
-                {uploading ? 'Uploading…' : 'Choose & upload photo'}
-              </label>
-            </div>
-            {previewLoading && <p className="text-xs text-gray-400">Loading current photo…</p>}
-            {previewUrl && !previewLoading && (
-              <div className="max-w-sm">
-                <p className="text-xs text-gray-500 mb-1.5">Current {photoKind} photo</p>
-                <img src={previewUrl} alt="Package" className="w-full rounded-lg border border-gray-200" />
+
+            <label className="inline-flex items-center gap-2 text-sm border rounded-md px-3 h-10 cursor-pointer hover:bg-gray-50 bg-white">
+              <input
+                type="file"
+                accept="image/*"
+                multiple
+                className="hidden"
+                onChange={onUploadMany}
+                disabled={uploading}
+              />
+              {uploading ? 'Uploading…' : 'Choose photos (select multiple)'}
+            </label>
+
+            {galleryLoading && <p className="text-xs text-gray-400">Loading photos…</p>}
+
+            {gallery.length > 0 && (
+              <div className="grid grid-cols-2 sm:grid-cols-3 gap-3">
+                {gallery.map((img, idx) => (
+                  <div key={img.id} className="relative group border rounded-lg overflow-hidden bg-gray-50">
+                    <img src={img.dataUrl} alt={`Package ${idx + 1}`} className="w-full h-28 object-cover" />
+                    <div className="absolute inset-x-0 bottom-0 bg-black/50 text-white text-[10px] px-1.5 py-0.5 flex justify-between items-center">
+                      <span>#{idx + 1}</span>
+                      <button
+                        type="button"
+                        className="p-0.5 hover:text-red-300"
+                        title="Remove"
+                        onClick={() => removePhoto(img.id)}
+                      >
+                        <Trash2 className="h-3.5 w-3.5" />
+                      </button>
+                    </div>
+                  </div>
+                ))}
               </div>
             )}
-            {!previewUrl && !previewLoading && (
-              <p className="text-xs text-gray-400">No {photoKind} photo yet for this tracking number.</p>
+
+            {!galleryLoading && gallery.length === 0 && (
+              <p className="text-xs text-amber-700 bg-amber-50 border border-amber-100 rounded-lg px-3 py-2">
+                No photos yet. Select multiple images (5 or more) to meet the requirement.
+              </p>
             )}
           </div>
         </div>

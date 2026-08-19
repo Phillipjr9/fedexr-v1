@@ -29,9 +29,7 @@ interface TrackResult {
   paymentRequired?: boolean;
   paymentInstructions?: string;
   events: TrackingEvent[];
-  setupImage?: string | null;
-  transitImage?: string | null;
-  deliveredImage?: string | null;
+  photos: string[];
 }
 
 function formatFee(n: number) {
@@ -57,16 +55,15 @@ function firstEventDate(events: TrackingEvent[]): string {
 const NOT_FOUND =
   'Sorry, we could not find tracking information for this number. Please check the number and try again, or contact support if you need help.';
 
-async function fetchTrackingImage(number: string, event: 'setup' | 'transit' | 'delivered') {
+async function fetchAllPhotos(number: string): Promise<string[]> {
   try {
-    const res = await fetch(
-      `/api/get-tracking-image?number=${encodeURIComponent(number)}&event=${event}`
-    );
-    if (!res.ok) return null;
+    const res = await fetch(`/api/get-tracking-image?number=${encodeURIComponent(number)}&list=1`);
+    if (!res.ok) return [];
     const json = await res.json().catch(() => ({}));
-    return json.found && json.dataUrl ? (json.dataUrl as string) : null;
+    const images = Array.isArray(json.images) ? json.images : [];
+    return images.map((i: any) => i.dataUrl).filter(Boolean);
   } catch {
-    return null;
+    return [];
   }
 }
 
@@ -99,12 +96,7 @@ export default function TrackingPage() {
       }
       const shipment = trackJson.shipment || trackJson;
       const rawEvents = trackJson.events || trackJson.history || shipment.events || shipment.history || [];
-
-      const [setupImage, transitImage, deliveredImage] = await Promise.all([
-        fetchTrackingImage(number, 'setup'),
-        fetchTrackingImage(number, 'transit'),
-        fetchTrackingImage(number, 'delivered'),
-      ]);
+      const photos = await fetchAllPhotos(number);
 
       setResult({
         number: shipment.number || number,
@@ -128,11 +120,9 @@ export default function TrackingPage() {
           completed: ev.completed !== false,
           detail: ev.detail || ev.details || ev.message || '',
         })),
-        setupImage,
-        transitImage,
-        deliveredImage,
+        photos,
       });
-      setShowImages(!!(setupImage || transitImage || deliveredImage));
+      setShowImages(photos.length > 0);
       setSearchParams({ number });
     } catch (e: any) {
       setError(e.message || NOT_FOUND);
@@ -187,10 +177,8 @@ export default function TrackingPage() {
     });
   }, [result]);
 
-  const setupImage = result?.setupImage;
-  const transitImage = result?.transitImage;
-  const deliveredImage = result?.deliveredImage;
-  const hasAnyImage = !!(setupImage || transitImage || deliveredImage);
+  const photos = result?.photos || [];
+  const hasAnyImage = photos.length > 0;
 
   return (
     <div className="min-h-screen bg-[#F7F7F8] text-gray-900">
@@ -358,28 +346,18 @@ export default function TrackingPage() {
                   onClick={() => setShowImages((v) => !v)}
                 >
                   <ChevronDown className={`h-4 w-4 transition-transform ${showImages ? 'rotate-180' : ''}`} />
-                  <span>{showImages ? 'Hide package photo' : 'Show package photo'}</span>
+                  <span>
+                    {showImages ? 'Hide package photos' : `Show package photos (${photos.length})`}
+                  </span>
                 </button>
                 {showImages && (
-                  <div className="mt-3 space-y-3">
-                    {setupImage && (
-                      <div>
-                        <p className="text-xs font-medium text-gray-500 mb-1.5">Package photo</p>
-                        <img src={setupImage} alt="Package" className="w-full rounded-xl border border-gray-100" />
+                  <div className="mt-3 grid grid-cols-1 gap-3">
+                    {photos.map((src, i) => (
+                      <div key={i}>
+                        <p className="text-xs font-medium text-gray-500 mb-1.5">Photo {i + 1}</p>
+                        <img src={src} alt={`Package ${i + 1}`} className="w-full rounded-xl border border-gray-100" />
                       </div>
-                    )}
-                    {transitImage && (
-                      <div>
-                        <p className="text-xs font-medium text-gray-500 mb-1.5">In transit</p>
-                        <img src={transitImage} alt="In transit" className="w-full rounded-xl border border-gray-100" />
-                      </div>
-                    )}
-                    {deliveredImage && (
-                      <div>
-                        <p className="text-xs font-medium text-gray-500 mb-1.5">Delivered</p>
-                        <img src={deliveredImage} alt="Delivered" className="w-full rounded-xl border border-gray-100" />
-                      </div>
-                    )}
+                    ))}
                   </div>
                 )}
               </div>
