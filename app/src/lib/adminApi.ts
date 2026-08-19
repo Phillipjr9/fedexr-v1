@@ -19,7 +19,7 @@ export async function apiGetShipment(number: string) {
   return json.shipments?.[0] || null;
 }
 
-export async function apiSaveShipment(body: Record<string, string>) {
+export async function apiSaveShipment(body: Record<string, string | boolean>) {
   const res = await fetch('/api/admin/shipments', {
     method: 'POST',
     headers: adminHeaders(),
@@ -53,10 +53,12 @@ export async function apiAddEvent(body: {
   if (!res.ok) throw new Error(json.error || 'Could not add scan event');
 }
 
+export type ImageEventType = 'setup' | 'delivered' | 'transit';
+
 export async function apiUploadImage(
   trackingNumber: string,
   dataUrl: string,
-  eventType: 'setup' | 'delivered'
+  eventType: ImageEventType
 ) {
   const res = await fetch('/api/upload-tracking-image', {
     method: 'POST',
@@ -67,7 +69,7 @@ export async function apiUploadImage(
   if (!res.ok) throw new Error(json.error || 'Could not upload image');
 }
 
-export async function apiGetImage(number: string, event: 'setup' | 'delivered') {
+export async function apiGetImage(number: string, event: ImageEventType) {
   const res = await fetch(`/api/get-tracking-image?number=${encodeURIComponent(number)}&event=${event}`);
   if (!res.ok) return null;
   const json = await res.json();
