@@ -14,6 +14,7 @@
     { "source": "/api/auth/register", "destination": "/api/auth?action=register" },
     { "source": "/api/get-tracking-image", "destination": "/api/images" },
     { "source": "/api/upload-tracking-image", "destination": "/api/images" },
+    { "source": "/api/pay", "destination": "/api/pay" },
     { "source": "/api/:path*", "destination": "/api/:path*" },
     { "source": "/(.*)", "destination": "/index.html" }
   ]
