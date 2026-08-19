@@ -5,15 +5,43 @@ function adminHeaders() {
   };
 }
 
+function clearAdminSession() {
+  localStorage.removeItem('isAdmin');
+  localStorage.removeItem('adminPassword');
+  localStorage.removeItem('adminUsername');
+}
+
+async function handleResponse(res: Response, fallback: string) {
+  if (res.status === 401) {
+    clearAdminSession();
+    if (typeof window !== 'undefined' && !window.location.pathname.endsWith('/admin')) {
+      window.location.href = '/admin';
+    }
+    throw new Error('Session expired. Sign in again.');
+  }
+  const json = await res.json().catch(() => ({}));
+  if (!res.ok) {
+    const msg = json.error || fallback;
+    if (/database|connection|DATABASE/i.test(msg)) {
+      throw new Error('Database not configured. Set DATABASE_URL (Neon) in Vercel and redeploy.');
+    }
+    throw new Error(msg);
+  }
+  return json;
+}
+
 export async function apiListShipments() {
   const res = await fetch('/api/admin/shipments', { headers: adminHeaders() });
-  if (!res.ok) throw new Error('Could not load shipments from database');
-  const json = await res.json();
+  const json = await handleResponse(res, 'Could not load shipments from database');
   return json.shipments as any[];
 }
 
 export async function apiGetShipment(number: string) {
   const res = await fetch(`/api/admin/shipments?number=${encodeURIComponent(number)}`);
+  if (res.status === 401) {
+    clearAdminSession();
+    return null;
+  }
   if (!res.ok) return null;
   const json = await res.json();
   return json.shipments?.[0] || null;
@@ -25,9 +53,7 @@ export async function apiSaveShipment(body: Record<string, string | boolean>) {
     headers: adminHeaders(),
     body: JSON.stringify(body),
   });
-  const json = await res.json().catch(() => ({}));
-  if (!res.ok) throw new Error(json.error || 'Could not save shipment');
-  return json;
+  return handleResponse(res, 'Could not save shipment');
 }
 
 export async function apiDeleteShipment(number: string) {
@@ -35,7 +61,7 @@ export async function apiDeleteShipment(number: string) {
     method: 'DELETE',
     headers: adminHeaders(),
   });
-  if (!res.ok) throw new Error('Could not delete shipment');
+  await handleResponse(res, 'Could not delete shipment');
 }
 
 export async function apiAddEvent(body: {
@@ -49,8 +75,7 @@ export async function apiAddEvent(body: {
     headers: adminHeaders(),
     body: JSON.stringify(body),
   });
-  const json = await res.json().catch(() => ({}));
-  if (!res.ok) throw new Error(json.error || 'Could not add scan event');
+  await handleResponse(res, 'Could not add scan event');
 }
 
 export type ImageEventType = 'setup' | 'delivered' | 'transit';
@@ -65,8 +90,7 @@ export async function apiUploadImage(
     headers: adminHeaders(),
     body: JSON.stringify({ trackingNumber, dataUrl, eventType }),
   });
-  const json = await res.json().catch(() => ({}));
-  if (!res.ok) throw new Error(json.error || 'Could not upload image');
+  await handleResponse(res, 'Could not upload image');
 }
 
 export async function apiGetImage(number: string, event: ImageEventType) {
@@ -78,8 +102,7 @@ export async function apiGetImage(number: string, event: ImageEventType) {
 
 export async function apiGetBanner() {
   const res = await fetch('/api/admin/banner');
-  if (!res.ok) throw new Error('Could not load banner');
-  const json = await res.json();
+  const json = await handleResponse(res, 'Could not load banner');
   return json.banner as { enabled: boolean; message: string; linkText: string; linkHref: string };
 }
 
@@ -94,14 +117,12 @@ export async function apiSaveBanner(banner: {
     headers: adminHeaders(),
     body: JSON.stringify(banner),
   });
-  const json = await res.json().catch(() => ({}));
-  if (!res.ok) throw new Error(json.error || 'Could not save banner');
+  await handleResponse(res, 'Could not save banner');
 }
 
 export async function apiListUsers() {
   const res = await fetch('/api/admin/users', { headers: adminHeaders() });
-  if (!res.ok) throw new Error('Could not load users');
-  const json = await res.json();
+  const json = await handleResponse(res, 'Could not load users');
   return json.users as any[];
 }
 
@@ -111,7 +132,7 @@ export async function apiSetUserDisabled(id: number, disabled: boolean) {
     headers: adminHeaders(),
     body: JSON.stringify({ id, disabled }),
   });
-  if (!res.ok) throw new Error('Could not update user');
+  await handleResponse(res, 'Could not update user');
 }
 
 export async function apiDeleteUser(id: number) {
@@ -119,13 +140,12 @@ export async function apiDeleteUser(id: number) {
     method: 'DELETE',
     headers: adminHeaders(),
   });
-  if (!res.ok) throw new Error('Could not delete user');
+  await handleResponse(res, 'Could not delete user');
 }
 
 export async function apiListActivity() {
   const res = await fetch('/api/admin/activity', { headers: adminHeaders() });
-  if (!res.ok) throw new Error('Could not load activity');
-  const json = await res.json();
+  const json = await handleResponse(res, 'Could not load activity');
   return json.activity as any[];
 }
 
@@ -133,8 +153,7 @@ export async function apiListLocations(all = false) {
   const res = await fetch(`/api/admin/locations${all ? '?all=true' : ''}`, {
     headers: all ? adminHeaders() : undefined,
   });
-  if (!res.ok) throw new Error('Could not load locations');
-  const json = await res.json();
+  const json = await handleResponse(res, 'Could not load locations');
   return json.locations as any[];
 }
 
@@ -144,8 +163,7 @@ export async function apiSaveLocation(body: Record<string, string>) {
     headers: adminHeaders(),
     body: JSON.stringify(body),
   });
-  const json = await res.json().catch(() => ({}));
-  if (!res.ok) throw new Error(json.error || 'Could not save location');
+  await handleResponse(res, 'Could not save location');
 }
 
 export async function apiDeleteLocation(id: number) {
@@ -153,5 +171,11 @@ export async function apiDeleteLocation(id: number) {
     method: 'DELETE',
     headers: adminHeaders(),
   });
-  if (!res.ok) throw new Error('Could not remove location');
+  await handleResponse(res, 'Could not remove location');
+}
+
+export async function apiListHolds() {
+  const res = await fetch('/api/holds', { headers: adminHeaders() });
+  const json = await handleResponse(res, 'Could not load holds');
+  return (json.holds || []) as any[];
 }
