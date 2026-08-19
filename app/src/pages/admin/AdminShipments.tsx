@@ -45,52 +45,85 @@ function blobToDataUrl(blob: Blob): Promise<string> {
   });
 }
 
-/** Build customer-facing delivery string from date (YYYY-MM-DD) + time (HH:MM). */
-function formatDeliveryLabel(date: string, time: string): string {
+const DELIVERY_WINDOWS = [
+  { id: '', label: 'No window selected', short: '' },
+  { id: 'morning', label: 'Morning (8:00 AM – 12:00 PM)', short: 'Morning (8:00 AM – 12:00 PM)' },
+  { id: 'afternoon', label: 'Afternoon (12:00 PM – 5:00 PM)', short: 'Afternoon (12:00 PM – 5:00 PM)' },
+  { id: 'evening', label: 'Evening (5:00 PM – 8:00 PM)', short: 'Evening (5:00 PM – 8:00 PM)' },
+  { id: 'all_day', label: 'All day (8:00 AM – 8:00 PM)', short: 'All day (8:00 AM – 8:00 PM)' },
+  { id: 'exact', label: 'Exact time (set below)', short: '' },
+] as const;
+
+type WindowId = (typeof DELIVERY_WINDOWS)[number]['id'];
+
+function formatDeliveryLabel(date: string, windowId: WindowId, exactTime: string): string {
   if (!date.trim()) return '';
   try {
     const d = new Date(`${date.trim()}T12:00:00`);
-    if (Number.isNaN(d.getTime())) return [date, time].filter(Boolean).join(' ');
+    if (Number.isNaN(d.getTime())) return date;
     const datePart = d.toLocaleDateString('en-US', {
       weekday: 'short',
       month: 'short',
       day: 'numeric',
       year: 'numeric',
     });
-    if (!time.trim()) return datePart;
-    const [hh, mm] = time.trim().split(':');
-    const t = new Date();
-    t.setHours(Number(hh) || 0, Number(mm) || 0, 0, 0);
-    const timePart = t.toLocaleTimeString('en-US', { hour: 'numeric', minute: '2-digit' });
-    return `${datePart} by ${timePart}`;
+
+    if (windowId === 'exact' && exactTime.trim()) {
+      const [hh, mm] = exactTime.trim().split(':');
+      const t = new Date();
+      t.setHours(Number(hh) || 0, Number(mm) || 0, 0, 0);
+      const timePart = t.toLocaleTimeString('en-US', { hour: 'numeric', minute: '2-digit' });
+      return `${datePart} by ${timePart}`;
+    }
+
+    const win = DELIVERY_WINDOWS.find((w) => w.id === windowId);
+    if (win?.short) return `${datePart} · ${win.short}`;
+    return datePart;
   } catch {
-    return [date, time].filter(Boolean).join(' ');
+    return date;
   }
 }
 
-/** Best-effort parse of stored label back into date/time inputs. */
-function parseDeliveryFields(label?: string): { date: string; time: string } {
-  if (!label?.trim()) return { date: '', time: '' };
+function parseDeliveryFields(label?: string): { date: string; windowId: WindowId; exactTime: string } {
+  if (!label?.trim()) return { date: '', windowId: '', exactTime: '' };
   const raw = label.trim();
-  // ISO-ish prefix
-  const iso = raw.match(/^(\d{4}-\d{2}-\d{2})(?:[T\s](\d{2}:\d{2}))?/);
-  if (iso) return { date: iso[1], time: iso[2] || '' };
-  try {
-    const d = new Date(raw);
-    if (!Number.isNaN(d.getTime())) {
-      const yyyy = d.getFullYear();
-      const mm = String(d.getMonth() + 1).padStart(2, '0');
-      const dd = String(d.getDate()).padStart(2, '0');
-      const hasTime = /\d{1,2}:\d{2}/.test(raw) || raw.includes('by');
-      const time = hasTime
-        ? `${String(d.getHours()).padStart(2, '0')}:${String(d.getMinutes()).padStart(2, '0')}`
-        : '';
-      return { date: `${yyyy}-${mm}-${dd}`, time };
+
+  let date = '';
+  const iso = raw.match(/^(\d{4}-\d{2}-\d{2})/);
+  if (iso) {
+    date = iso[1];
+  } else {
+    try {
+      const d = new Date(raw);
+      if (!Number.isNaN(d.getTime())) {
+        date = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
+      }
+    } catch {
+      /* ok */
     }
-  } catch {
-    /* fall through */
   }
-  return { date: '', time: '' };
+
+  const lower = raw.toLowerCase();
+  if (lower.includes('morning')) return { date, windowId: 'morning', exactTime: '' };
+  if (lower.includes('afternoon')) return { date, windowId: 'afternoon', exactTime: '' };
+  if (lower.includes('evening')) return { date, windowId: 'evening', exactTime: '' };
+  if (lower.includes('all day')) return { date, windowId: 'all_day', exactTime: '' };
+
+  const byMatch = raw.match(/by\s+(\d{1,2}):(\d{2})\s*(AM|PM)?/i);
+  if (byMatch) {
+    let h = Number(byMatch[1]);
+    const m = byMatch[2];
+    const ap = (byMatch[3] || '').toUpperCase();
+    if (ap === 'PM' && h < 12) h += 12;
+    if (ap === 'AM' && h === 12) h = 0;
+    return {
+      date,
+      windowId: 'exact',
+      exactTime: `${String(h).padStart(2, '0')}:${m}`,
+    };
+  }
+
+  return { date, windowId: '', exactTime: '' };
 }
 
 type ShipmentRow = {
@@ -137,6 +170,7 @@ export default function AdminShipments() {
   const [collectPayment, setCollectPayment] = useState(false);
   const [paymentInstructions, setPaymentInstructions] = useState(DEFAULT_PAYMENT_INSTRUCTIONS);
   const [deliveryDate, setDeliveryDate] = useState('');
+  const [deliveryWindow, setDeliveryWindow] = useState<WindowId>('');
   const [deliveryTime, setDeliveryTime] = useState('');
   const [routeStops, setRouteStops] = useState<Place[]>([]);
   const [selectedStops, setSelectedStops] = useState<Record<number, boolean>>({});
@@ -153,8 +187,8 @@ export default function AdminShipments() {
   const photoCount = gallery.length;
   const previewUrls = useMemo(() => gallery.map((g) => g.dataUrl), [gallery]);
   const deliveryPreview = useMemo(
-    () => formatDeliveryLabel(deliveryDate, deliveryTime),
-    [deliveryDate, deliveryTime]
+    () => formatDeliveryLabel(deliveryDate, deliveryWindow, deliveryTime),
+    [deliveryDate, deliveryWindow, deliveryTime]
   );
 
   async function refresh() {
@@ -209,7 +243,8 @@ export default function AdminShipments() {
     if (s.paymentInstructions) setPaymentInstructions(s.paymentInstructions);
     const parsed = parseDeliveryFields(s.estimatedDelivery);
     setDeliveryDate(parsed.date);
-    setDeliveryTime(parsed.time);
+    setDeliveryWindow(parsed.windowId);
+    setDeliveryTime(parsed.exactTime);
     setEditMessage('');
     setGallery([]);
     setPreviewIndex(null);
@@ -241,7 +276,7 @@ export default function AdminShipments() {
   }
 
   function deliveryPayload() {
-    const label = formatDeliveryLabel(deliveryDate, deliveryTime);
+    const label = formatDeliveryLabel(deliveryDate, deliveryWindow, deliveryTime);
     return {
       estimatedDelivery: label,
       estimatedDeliveryText: label,
@@ -401,28 +436,48 @@ export default function AdminShipments() {
   const editingRow = editing ? list.find((s) => s.number === editing) : null;
 
   const deliveryFields = (
-    <div className="grid sm:grid-cols-2 gap-3">
-      <div>
-        <label className="text-xs text-gray-500">Scheduled delivery date</label>
-        <Input
-          type="date"
-          value={deliveryDate}
-          onChange={(e) => setDeliveryDate(e.target.value)}
-          className="mt-0.5"
-        />
+    <div className="space-y-3 rounded-lg border border-gray-100 bg-gray-50/80 p-3">
+      <p className="text-xs font-semibold text-gray-700 uppercase tracking-wide">Scheduled delivery</p>
+      <div className="grid sm:grid-cols-2 gap-3">
+        <div>
+          <label className="text-xs text-gray-500">Date</label>
+          <Input
+            type="date"
+            value={deliveryDate}
+            onChange={(e) => setDeliveryDate(e.target.value)}
+            className="mt-0.5 bg-white"
+          />
+        </div>
+        <div>
+          <label className="text-xs text-gray-500">Delivery window</label>
+          <select
+            className="mt-0.5 w-full border rounded-md h-10 px-2 text-sm bg-white"
+            value={deliveryWindow}
+            onChange={(e) => setDeliveryWindow(e.target.value as WindowId)}
+          >
+            {DELIVERY_WINDOWS.map((w) => (
+              <option key={w.id || 'none'} value={w.id}>
+                {w.label}
+              </option>
+            ))}
+          </select>
+        </div>
       </div>
-      <div>
-        <label className="text-xs text-gray-500">Delivery time (optional)</label>
-        <Input
-          type="time"
-          value={deliveryTime}
-          onChange={(e) => setDeliveryTime(e.target.value)}
-          className="mt-0.5"
-        />
-      </div>
+      {deliveryWindow === 'exact' && (
+        <div className="max-w-xs">
+          <label className="text-xs text-gray-500">Exact delivery time</label>
+          <Input
+            type="time"
+            value={deliveryTime}
+            onChange={(e) => setDeliveryTime(e.target.value)}
+            className="mt-0.5 bg-white"
+          />
+        </div>
+      )}
       {deliveryPreview && (
-        <p className="sm:col-span-2 text-xs text-gray-600">
-          Customer will see: <span className="font-medium text-gray-900">{deliveryPreview}</span>
+        <p className="text-xs text-gray-600">
+          Customer will see:{' '}
+          <span className="font-medium text-gray-900">{deliveryPreview}</span>
         </p>
       )}
     </div>
@@ -433,7 +488,7 @@ export default function AdminShipments() {
       <div>
         <h1 className="text-xl font-semibold text-gray-900">Shipments</h1>
         <p className="text-sm text-gray-500">
-          Create labels, set delivery date/time, fees, and optional package photos.
+          Create labels, set delivery date and window, fees, and optional package photos.
         </p>
       </div>
 
