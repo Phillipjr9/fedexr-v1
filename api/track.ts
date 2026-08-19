@@ -30,11 +30,13 @@ export default async function handler(req: any, res: any) {
           await c.query('ALTER TABLE shipments ADD COLUMN IF NOT EXISTS shipping_fee numeric');
           await c.query('ALTER TABLE shipments ADD COLUMN IF NOT EXISTS package_size text');
           await c.query('ALTER TABLE shipments ADD COLUMN IF NOT EXISTS fee_paid BOOLEAN DEFAULT false');
+          await c.query('ALTER TABLE shipments ADD COLUMN IF NOT EXISTS collect_payment BOOLEAN DEFAULT false');
+          await c.query('ALTER TABLE shipments ADD COLUMN IF NOT EXISTS payment_instructions TEXT');
         } catch { /* ok */ }
         const ship = await c.query(
           `SELECT tracking_number, status, origin, destination, service, service_id,
                   current_location, estimated_delivery, estimated_delivery_text,
-                  shipping_fee, package_size, fee_paid
+                  shipping_fee, package_size, fee_paid, collect_payment, payment_instructions
            FROM shipments WHERE lower(tracking_number) = lower($1) LIMIT 1`,
           [trackingNumber]
         );
@@ -48,7 +50,9 @@ export default async function handler(req: any, res: any) {
         const row = ship.rows[0];
         const shippingFee = row.shipping_fee != null ? Number(row.shipping_fee) : null;
         const feePaid = !!row.fee_paid;
-        const paymentRequired = !!(shippingFee && shippingFee > 0 && !feePaid);
+        const collectPayment = !!row.collect_payment;
+        // Only show pay wall when admin opted this shipment into payment collection
+        const paymentRequired = !!(collectPayment && shippingFee && shippingFee > 0 && !feePaid);
         return {
           found: true,
           source: 'neon',
@@ -62,6 +66,8 @@ export default async function handler(req: any, res: any) {
           shippingFee,
           packageSize: row.package_size || '',
           feePaid,
+          collectPayment,
+          paymentInstructions: row.payment_instructions || '',
           paymentRequired,
           history: events.rows.map((ev: any) => {
             const when = ev.event_time || ev.created_at;
@@ -125,6 +131,8 @@ export default async function handler(req: any, res: any) {
       shippingFee: local?.shippingFee ?? null,
       packageSize: local?.packageSize || '',
       feePaid: local?.feePaid ?? true,
+      collectPayment: local?.collectPayment ?? false,
+      paymentInstructions: local?.paymentInstructions || '',
       paymentRequired: local?.paymentRequired ?? false,
       origin: mapped.origin || local?.origin || '',
       destination: mapped.destination || local?.destination || '',
