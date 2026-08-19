@@ -4,6 +4,7 @@ import { Input } from '@/components/ui/input';
 import { toast } from 'sonner';
 import { FEDEX_SERVICES, generateTrackingNumber, geocodePlaces, fetchRoute, type Place } from '@/lib/places';
 import { HOLD_REASONS } from '@/lib/holdReasons';
+import { PACKAGE_SIZES, formatFee, quoteFee } from '@/lib/shippingRates';
 import { apiAddEvent, apiDeleteShipment, apiListShipments, apiSaveShipment, apiUploadImage } from '@/lib/adminApi';
 import { Copy, RefreshCw, Sparkles, Truck } from 'lucide-react';
 
@@ -51,6 +52,8 @@ export default function AdminShipments() {
   const [origin, setOrigin] = useState('');
   const [destination, setDestination] = useState('');
   const [service, setService] = useState('FedEx Ground');
+  const [sizeId, setSizeId] = useState('medium');
+  const [manualFee, setManualFee] = useState('');
   const [scene, setScene] = useState(SCENES[2]);
   const [number, setNumber] = useState(generateTrackingNumber());
   const [photo, setPhoto] = useState('');
@@ -63,6 +66,8 @@ export default function AdminShipments() {
   const [holdOther, setHoldOther] = useState('');
 
   const reasonText = holdReason === 'Other' ? holdOther.trim() : holdReason;
+  const quoted = quoteFee(sizeId, service);
+  const fee = manualFee.trim() === '' ? quoted : Number(manualFee);
 
   useEffect(() => {
     if (origin.length < 8 || destination.length < 8) { setRoute(null); return; }
@@ -106,27 +111,28 @@ export default function AdminShipments() {
   const publish = async () => {
     if (!origin || !destination) { toast.error('Choose from and to'); return; }
     if (scene.id === 'hold' && !reasonText) { toast.error('Choose why it was stopped'); return; }
+    if (!Number.isFinite(fee) || fee < 0) { toast.error('Enter a valid shipping fee'); return; }
     setBusy(true);
     try {
       const last = story[story.length - 1];
+      const sizeLabel = PACKAGE_SIZES.find((s) => s.id === sizeId)?.label || sizeId;
       await apiSaveShipment({
         number, status: last?.status || 'Label created', origin, destination, service,
         estimatedDelivery: eta(service), location: last?.location || origin,
+        shippingFee: String(fee), packageSize: sizeLabel,
       });
       for (const ev of story) {
         try { await apiAddEvent({ number, status: ev.status, location: ev.location, details: ev.details }); } catch { /* ok */ }
       }
       if (scene.id === 'hold') {
-        const res = await fetch('/api/holds', {
+        await fetch('/api/holds', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json', 'x-admin-secret': localStorage.getItem('adminPassword') || '' },
           body: JSON.stringify({ number, location: last?.location || pin, reason: reasonText, email: 'admin@internal' }),
         });
-        const json = await res.json().catch(() => ({}));
-        if (!res.ok) toast.error(json.error || 'Hold saved on tracking, but holds list failed');
       }
       if (photo) await apiUploadImage(number, photo, scene.rank >= 4 ? 'delivered' : 'setup');
-      toast.success(`${number} is live`);
+      toast.success(`${number} is live · ${formatFee(fee)}`);
       setNumber(generateTrackingNumber());
       setPhoto('');
       await refresh();
@@ -140,14 +146,11 @@ export default function AdminShipments() {
       <div className="flex items-start justify-between gap-4">
         <div>
           <h1 className="text-2xl font-semibold">Create a tracking story</h1>
-          <p className="text-sm text-gray-500">Full address in, route calculated, stop anywhere with a reason.</p>
+          <p className="text-sm text-gray-500">Size sets the rate. Override the fee if you need to.</p>
         </div>
         <div className="text-right">
           <p className="font-mono text-lg">{number}</p>
-          <div className="flex justify-end gap-1 mt-1">
-            <Button size="sm" variant="outline" onClick={() => { navigator.clipboard.writeText(number); toast.success('Copied'); }}><Copy className="h-3.5 w-3.5" /></Button>
-            <Button size="sm" variant="outline" onClick={() => setNumber(generateTrackingNumber())}><RefreshCw className="h-3.5 w-3.5" /></Button>
-          </div>
+          <p className="text-sm text-[#4D148C] font-semibold">{formatFee(Number.isFinite(fee) ? fee : 0)}</p>
         </div>
       </div>
       <div className="grid md:grid-cols-2 gap-3">
@@ -157,6 +160,24 @@ export default function AdminShipments() {
       <select className="border rounded h-10 px-3" value={service} onChange={(e) => setService(e.target.value)}>
         {FEDEX_SERVICES.map((s) => <option key={s}>{s}</option>)}
       </select>
+      <div className="grid sm:grid-cols-3 gap-2">
+        {PACKAGE_SIZES.map((s) => (
+          <button key={s.id} type="button" onClick={() => setSizeId(s.id)} className={`rounded-xl border p-3 text-left ${sizeId === s.id ? 'border-[#4D148C] bg-purple-50' : 'bg-white'}`}>
+            <p className="font-semibold text-sm">{s.label}</p>
+            <p className="text-xs text-gray-500">{s.hint} · {formatFee(quoteFee(s.id, service))}</p>
+          </button>
+        ))}
+      </div>
+      <div className="bg-white border rounded-xl p-4 flex flex-wrap items-end gap-4">
+        <div>
+          <p className="text-xs text-gray-500">Quoted for this size + service</p>
+          <p className="text-lg font-semibold">{formatFee(quoted)}</p>
+        </div>
+        <div className="flex-1 min-w-[160px]">
+          <label className="block text-xs text-gray-500 mb-1">Manual fee (leave blank to use quote)</label>
+          <Input type="number" min="0" step="0.01" value={manualFee} onChange={(e) => setManualFee(e.target.value)} placeholder={String(quoted)} />
+        </div>
+      </div>
       <div className="grid sm:grid-cols-3 lg:grid-cols-6 gap-2">
         {SCENES.map((s) => (
           <button key={s.id} type="button" onClick={() => setScene(s)} className={`rounded-xl border p-3 text-left text-sm font-semibold ${scene.id === s.id ? 'border-[#4D148C] bg-purple-50' : 'bg-white'}`}>{s.label}</button>
@@ -180,7 +201,6 @@ export default function AdminShipments() {
             {HOLD_REASONS.map((r) => <option key={r}>{r}</option>)}
           </select>
           {holdReason === 'Other' && <Input value={holdOther} onChange={(e) => setHoldOther(e.target.value)} placeholder="Type the full reason" />}
-          <p className="text-xs text-gray-600">This full reason shows on tracking and on the Holds page.</p>
         </div>
       )}
       <div className="bg-white border rounded-xl p-5">
@@ -192,19 +212,21 @@ export default function AdminShipments() {
               <div>
                 <p className="font-semibold">{ev.status}</p>
                 <p className="text-gray-600">{ev.location}</p>
-                <p className="text-xs text-gray-500">{ev.details}</p>
               </div>
             </li>
           ))}
         </ol>
       </div>
-      <Button disabled={busy} className="bg-[#4D148C] text-white" onClick={publish}><Truck className="h-4 w-4 mr-2" />{busy ? 'Publishing…' : 'Make it live'}</Button>
+      <Button disabled={busy} className="bg-[#4D148C] text-white" onClick={publish}><Truck className="h-4 w-4 mr-2" />{busy ? 'Publishing…' : `Make it live · ${formatFee(Number.isFinite(fee) ? fee : 0)}`}</Button>
       <div className="bg-white border rounded-xl p-5">
         <h2 className="font-semibold mb-3">Live now</h2>
         <ul className="divide-y text-sm">
           {shipments.map((s) => (
             <li key={s.number} className="py-3 flex justify-between gap-3">
-              <div><p className="font-mono">{s.number}</p><p className="text-gray-500">{s.status}</p></div>
+              <div>
+                <p className="font-mono">{s.number}</p>
+                <p className="text-gray-500">{s.status}{s.shippingFee != null ? ` · ${formatFee(s.shippingFee)}` : ''}</p>
+              </div>
               <Button variant="outline" onClick={async () => { if (!confirm('Delete?')) return; await apiDeleteShipment(s.number); refresh(); }}>Remove</Button>
             </li>
           ))}
