@@ -2,6 +2,7 @@
   "name": "fedexr-v1",
   "private": true,
   "version": "1.0.0",
+  "type": "module",
   "description": "FedEx-look full stack app",
   "dependencies": {
     "pg": "^8.23.0"
