@@ -35,6 +35,20 @@ async function withDb(fn: (client: any) => Promise<any>) {
   }
 }
 
+/** Public-safe event detail — never expose internal wording */
+function publicEventDetails(status: string, provided?: string) {
+  const raw = String(provided || '').trim();
+  if (raw && !/admin/i.test(raw)) return raw;
+  const s = String(status || '').toLowerCase();
+  if (s.includes('label') || s.includes('created')) return 'Shipping label created';
+  if (s.includes('pick')) return 'We have your package';
+  if (s.includes('out for')) return 'On a local truck';
+  if (s.includes('deliver')) return 'Delivered';
+  if (s.includes('hold')) return 'Held at location';
+  if (s.includes('transit') || s.includes('on the way')) return 'On the way';
+  return 'Shipment updated';
+}
+
 export default async function handler(req: any, res: any) {
   try {
     const body = parseBody(req);
@@ -69,7 +83,8 @@ export default async function handler(req: any, res: any) {
             (eventsByNumber[e.tracking_number] ||= []).push({
               date: when ? new Date(when).toLocaleDateString() : '',
               time: when ? new Date(when).toLocaleTimeString() : '',
-              location: e.location || '', status: e.status || '', completed: true, details: e.details || '',
+              location: e.location || '', status: e.status || '', completed: true,
+              details: publicEventDetails(e.status || '', e.details || ''),
             });
           }
         }
@@ -103,8 +118,9 @@ export default async function handler(req: any, res: any) {
       const status = String(body.status || '').trim();
       const location = String(body.location || '').trim();
       if (!number || !status || !location) return res.status(400).json({ error: 'Tracking number, status and location required' });
+      const details = publicEventDetails(status, body.details);
       await withDb(async (c) => {
-        await c.query('INSERT INTO shipment_events (tracking_number, location, status, details) VALUES ($1,$2,$3,$4)', [number, location, status, body.details || 'Admin scan']);
+        await c.query('INSERT INTO shipment_events (tracking_number, location, status, details) VALUES ($1,$2,$3,$4)', [number, location, status, details]);
         await c.query('UPDATE shipments SET status = $2, current_location = $3, updated_at = now() WHERE tracking_number = $1', [number, status, location]);
       });
       return res.status(200).json({ ok: true });
@@ -114,19 +130,21 @@ export default async function handler(req: any, res: any) {
       const number = String(body.number || '').trim();
       if (!number) return res.status(400).json({ error: 'Tracking number required' });
       const fee = body.shippingFee === '' || body.shippingFee == null ? null : Number(body.shippingFee);
+      const status = body.status || 'In transit';
+      const details = publicEventDetails(status, body.details);
       await withDb(async (c) => {
         await c.query(
           `INSERT INTO shipments (tracking_number, status, origin, destination, service, service_id, current_location, estimated_delivery_text, shipping_fee, package_size, updated_at)
            VALUES ($1,$2,$3,$4,$5,$5,$6,$7,$8,$9,now())
            ON CONFLICT (tracking_number) DO UPDATE SET status = EXCLUDED.status, origin = EXCLUDED.origin, destination = EXCLUDED.destination, service = EXCLUDED.service, service_id = EXCLUDED.service_id, current_location = EXCLUDED.current_location, estimated_delivery_text = EXCLUDED.estimated_delivery_text, shipping_fee = EXCLUDED.shipping_fee, package_size = EXCLUDED.package_size, updated_at = now()`,
-          [number, body.status || 'In transit', body.origin || '', body.destination || '', body.service || '', body.location || '', body.estimatedDelivery || '', Number.isFinite(fee) ? fee : null, body.packageSize || '']
+          [number, status, body.origin || '', body.destination || '', body.service || '', body.location || '', body.estimatedDelivery || '', Number.isFinite(fee) ? fee : null, body.packageSize || '']
         );
-        await c.query('INSERT INTO shipment_events (tracking_number, location, status, details) VALUES ($1,$2,$3,$4)', [number, body.location || body.destination || '', body.status || 'In transit', 'Admin update']);
+        await c.query('INSERT INTO shipment_events (tracking_number, location, status, details) VALUES ($1,$2,$3,$4)', [number, body.location || body.destination || '', status, details]);
       });
       return res.status(200).json({ ok: true, number });
     }
     return res.status(405).json({ error: 'Method not allowed' });
   } catch (err: any) {
-    return res.status(500).json({ error: err?.message || 'Admin API error' });
+    return res.status(500).json({ error: err?.message || 'API error' });
   }
 }
