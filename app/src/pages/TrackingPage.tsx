@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useState } from 'react';
 import { Link, useSearchParams } from 'react-router-dom';
-import { Search, ChevronDown, MapPin } from 'lucide-react';
+import { Search, ChevronDown, MapPin, Package } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { toast } from 'sonner';
@@ -62,6 +62,7 @@ export default function TrackingPage() {
   const [error, setError] = useState('');
   const [showImages, setShowImages] = useState(false);
   const [showDetails, setShowDetails] = useState(false);
+  const [payOpen, setPayOpen] = useState(false);
   const [payName, setPayName] = useState('');
   const [payEmail, setPayEmail] = useState('');
   const [paying, setPaying] = useState(false);
@@ -74,6 +75,7 @@ export default function TrackingPage() {
     setResult(null);
     setShowImages(false);
     setShowDetails(false);
+    setPayOpen(false);
     try {
       const res = await fetch(`/api/track?number=${encodeURIComponent(number)}`);
       const trackJson = await res.json().catch(() => ({}));
@@ -154,7 +156,11 @@ export default function TrackingPage() {
   const labelDate = useMemo(() => {
     if (!result) return '';
     return firstEventDate(result.events) || new Date().toLocaleString('en-US', {
-      month: 'numeric', day: 'numeric', year: '2-digit', hour: 'numeric', minute: '2-digit',
+      month: 'numeric',
+      day: 'numeric',
+      year: '2-digit',
+      hour: 'numeric',
+      minute: '2-digit',
     });
   }, [result]);
 
@@ -163,11 +169,11 @@ export default function TrackingPage() {
   const deliveredImage = result?.deliveredImage;
 
   return (
-    <div className="min-h-screen bg-white text-gray-900">
+    <div className="min-h-screen bg-[#F7F7F8] text-gray-900">
       {!result && (
-        <section className="max-w-lg mx-auto px-4 pt-24 pb-16">
-          <div className="bg-white rounded-xl shadow-sm border p-6 space-y-4">
-            <h1 className="text-xl font-semibold">Track a package</h1>
+        <section className="max-w-lg mx-auto px-4 pt-20 pb-16">
+          <div className="bg-white rounded-2xl shadow-sm border border-gray-100 p-6 space-y-4">
+            <h1 className="text-xl font-semibold tracking-tight">Track a package</h1>
             <form
               onSubmit={(e) => {
                 e.preventDefault();
@@ -179,9 +185,9 @@ export default function TrackingPage() {
                 value={query}
                 onChange={(e) => setQuery(e.target.value)}
                 placeholder="Tracking number"
-                className="flex-1"
+                className="flex-1 h-11"
               />
-              <Button type="submit" disabled={loading} className="bg-[#FF6200] hover:bg-[#e55a00] text-white">
+              <Button type="submit" disabled={loading} className="h-11 bg-[#FF6200] hover:bg-[#e55a00] text-white px-4">
                 {loading ? '…' : <Search className="h-4 w-4" />}
               </Button>
             </form>
@@ -191,127 +197,173 @@ export default function TrackingPage() {
       )}
 
       {result && (
-        <div className="max-w-lg mx-auto bg-white min-h-screen pb-28 pt-4">
-          {paymentRequired && feeLabel && (
-            <div className="mx-5 mb-4 rounded-xl border-2 border-[#FF6200] bg-orange-50 px-4 py-4 text-sm space-y-3">
-              <div>
-                <p className="font-bold text-gray-900 text-base">Pay {feeLabel} to continue tracking</p>
-                <p className="text-gray-700 mt-1">
-                  This fee must be paid before the package can move in the network and tracking can advance past Label Created.
-                </p>
-                {result.packageSize && <p className="text-gray-600 text-xs mt-1">Package: {result.packageSize}</p>}
-                {result.service && <p className="text-gray-600 text-xs">{result.service}</p>}
+        <div className="max-w-lg mx-auto min-h-screen pb-28">
+          {/* Status header — primary focus */}
+          <div className="bg-white border-b border-gray-100 px-5 pt-5 pb-4">
+            <div className="flex items-start gap-3">
+              <div className="mt-0.5 flex h-11 w-11 shrink-0 items-center justify-center rounded-full bg-[#4D148C]/10">
+                <Package className="h-5 w-5 text-[#4D148C]" strokeWidth={2} />
               </div>
-              {result.paymentInstructions && (
-                <div className="rounded-lg border border-amber-300 bg-white px-3 py-2 text-xs text-gray-800 whitespace-pre-wrap">
-                  <p className="font-semibold text-gray-900 mb-1">How to pay (offline)</p>
-                  {result.paymentInstructions}
+              <div className="min-w-0 flex-1">
+                <p className="text-[11px] font-semibold uppercase tracking-wider text-gray-500">Status</p>
+                <p className="text-xl font-bold text-gray-900 leading-tight mt-0.5">{result.status || 'Label created'}</p>
+                <p className="mt-1.5 font-mono text-[13px] text-gray-500 tracking-wide">{result.number}</p>
+                {result.service && (
+                  <p className="mt-1 text-xs text-gray-500">{result.service}{result.packageSize ? ` · ${result.packageSize}` : ''}</p>
+                )}
+              </div>
+            </div>
+          </div>
+
+          {/* Compact payment strip (secondary) */}
+          {paymentRequired && feeLabel && (
+            <div className="mx-4 mt-3 rounded-xl border border-amber-200/80 bg-white shadow-sm overflow-hidden">
+              <button
+                type="button"
+                onClick={() => setPayOpen((v) => !v)}
+                className="w-full flex items-center gap-3 px-4 py-3 text-left"
+              >
+                <span className="flex h-8 w-8 shrink-0 items-center justify-center rounded-full bg-amber-100 text-amber-800 text-sm font-bold">$</span>
+                <div className="min-w-0 flex-1">
+                  <p className="text-sm font-semibold text-gray-900">Shipping fee due · {feeLabel}</p>
+                  <p className="text-xs text-gray-500 truncate">Pay offline to unlock further updates</p>
+                </div>
+                <ChevronDown className={`h-4 w-4 text-gray-400 shrink-0 transition-transform ${payOpen ? 'rotate-180' : ''}`} />
+              </button>
+              {payOpen && (
+                <div className="border-t border-amber-100 px-4 pb-4 pt-3 space-y-3">
+                  {result.paymentInstructions && (
+                    <p className="text-xs text-gray-600 leading-relaxed whitespace-pre-wrap bg-amber-50/80 rounded-lg px-3 py-2">
+                      {result.paymentInstructions}
+                    </p>
+                  )}
+                  <form onSubmit={submitPayment} className="space-y-2">
+                    <Input placeholder="Full name" value={payName} onChange={(e) => setPayName(e.target.value)} required className="h-10" />
+                    <Input type="email" placeholder="Email for receipt" value={payEmail} onChange={(e) => setPayEmail(e.target.value)} required className="h-10" />
+                    <Button type="submit" disabled={paying} className="w-full h-10 bg-[#FF6200] hover:bg-[#e55a00] text-white text-sm font-semibold">
+                      {paying ? 'Recording…' : `Confirm offline payment · ${feeLabel}`}
+                    </Button>
+                  </form>
                 </div>
               )}
-              <form onSubmit={submitPayment} className="space-y-2 bg-white rounded-lg border p-3">
-                <p className="text-xs text-gray-500">After you pay offline, submit your details so tracking can unlock.</p>
-                <Input placeholder="Full name" value={payName} onChange={(e) => setPayName(e.target.value)} required />
-                <Input type="email" placeholder="Email for receipt" value={payEmail} onChange={(e) => setPayEmail(e.target.value)} required />
-                <Button type="submit" disabled={paying} className="w-full bg-[#FF6200] hover:bg-[#e55a00] text-white font-semibold">
-                  {paying ? 'Recording…' : `I paid ${feeLabel} offline — continue tracking`}
-                </Button>
-              </form>
             </div>
           )}
 
           {!paymentRequired && feeLabel && (
-            <div className="mx-5 mb-4 rounded-lg border border-green-200 bg-green-50 px-4 py-3 text-sm">
-              <p className="font-semibold text-gray-900">Shipping charge {feeLabel} · Paid</p>
-              {result.packageSize && (
-                <p className="text-xs text-gray-600 mt-0.5">
-                  {result.packageSize}{result.service ? ` · ${result.service}` : ''}
-                </p>
-              )}
+            <div className="mx-4 mt-3 rounded-lg border border-green-200 bg-green-50/80 px-4 py-2.5 flex items-center gap-2">
+              <span className="text-green-700 text-sm font-medium">Shipping charge {feeLabel} · Paid</span>
             </div>
           )}
 
-          <div className="px-5 pt-2 pb-6">
-            <div className="relative pl-14">
-              <div className="absolute left-[22px] top-10 bottom-4 w-[3px] rounded-full bg-gray-200" aria-hidden />
+          {/* Timeline — main content */}
+          <div className="mx-4 mt-4 mb-6 rounded-2xl bg-white border border-gray-100 shadow-sm px-5 py-6">
+            <p className="text-[11px] font-bold uppercase tracking-wider text-gray-400 mb-5">Shipment progress</p>
 
-              <div className="relative mb-8">
-                <div className="absolute -left-14 top-0 flex h-12 w-12 items-center justify-center">
-                  <span className="absolute h-12 w-12 rounded-full bg-[#4D148C]/15" />
-                  <span className="relative flex h-10 w-10 items-center justify-center rounded-full bg-[#4D148C] shadow-sm">
-                    <MapPin className="h-5 w-5 text-white" strokeWidth={2.25} />
+            <div className="relative pl-12">
+              <div className="absolute left-[18px] top-3 bottom-3 w-[2px] bg-gray-200" aria-hidden />
+
+              {/* FROM */}
+              <div className="relative mb-10">
+                <div className="absolute -left-12 top-0 flex h-9 w-9 items-center justify-center">
+                  <span className="absolute h-9 w-9 rounded-full bg-[#4D148C]/15" />
+                  <span className="relative flex h-8 w-8 items-center justify-center rounded-full bg-[#4D148C] shadow-sm">
+                    <MapPin className="h-4 w-4 text-white" strokeWidth={2.25} />
                   </span>
                 </div>
-
-                <div className="rounded-2xl bg-[#F3F3F5] px-4 py-3.5">
-                  <p className="text-[11px] font-bold uppercase tracking-wide text-gray-900">From</p>
-                  <p className="text-[15px] font-semibold text-gray-900 leading-snug mt-0.5">
-                    {result.origin || '—'}
-                  </p>
-                  <p className="mt-2 text-[14px] italic text-gray-700">Label Created</p>
-                  {labelDate && <p className="text-[13px] text-gray-600 mt-0.5">{labelDate}</p>}
-                  {paymentRequired && feeLabel ? (
-                    <p className="mt-2 text-[13px] font-medium text-[#FF6200]">Pay {feeLabel} to continue tracking</p>
-                  ) : (
-                    <button type="button" onClick={() => setShowDetails((v) => !v)} className="mt-2 text-[13px] text-gray-900 underline underline-offset-2">
-                      {showDetails ? 'Hide details' : 'View more details'}
-                    </button>
-                  )}
-                  {showDetails && !paymentRequired && (
-                    <div className="mt-2 text-xs text-gray-600 space-y-1 border-t border-gray-200 pt-2">
-                      <p>Tracking: <span className="font-mono">{result.number}</span></p>
-                      {result.service && <p>Service: {result.service}</p>}
-                      {result.packageSize && <p>Package: {result.packageSize}</p>}
-                      {result.currentLocation && <p>Last location: {result.currentLocation}</p>}
-                    </div>
-                  )}
-                </div>
+                <p className="text-[11px] font-bold uppercase tracking-wider text-[#4D148C]">From</p>
+                <p className="text-base font-semibold text-gray-900 leading-snug mt-1">{result.origin || '—'}</p>
+                <p className="mt-2 text-sm font-medium text-gray-800">Label Created</p>
+                {labelDate && <p className="text-sm text-gray-500 mt-0.5">{labelDate}</p>}
+                {paymentRequired && feeLabel ? (
+                  <p className="mt-2 text-sm text-amber-700">Awaiting shipping fee ({feeLabel})</p>
+                ) : (
+                  <button
+                    type="button"
+                    onClick={() => setShowDetails((v) => !v)}
+                    className="mt-2 text-sm text-[#4D148C] font-medium underline underline-offset-2"
+                  >
+                    {showDetails ? 'Hide details' : 'View more details'}
+                  </button>
+                )}
+                {showDetails && !paymentRequired && (
+                  <div className="mt-3 text-sm text-gray-600 space-y-1 rounded-lg bg-gray-50 px-3 py-2.5">
+                    <p>Tracking: <span className="font-mono text-gray-900">{result.number}</span></p>
+                    {result.service && <p>Service: {result.service}</p>}
+                    {result.packageSize && <p>Package: {result.packageSize}</p>}
+                    {result.currentLocation && <p>Last location: {result.currentLocation}</p>}
+                  </div>
+                )}
               </div>
 
-              <Milestone label="WE HAVE YOUR PACKAGE" active={stage >= 1} done={stage > 1} />
-              <Milestone label="ON THE WAY" active={stage >= 2} done={stage > 2} />
-              <Milestone label="OUT FOR DELIVERY" active={stage >= 3} done={stage > 3} />
+              <Milestone label="We have your package" active={stage >= 1} done={stage > 1} />
+              <Milestone label="On the way" active={stage >= 2} done={stage > 2} />
+              <Milestone label="Out for delivery" active={stage >= 3} done={stage > 3} />
 
-              <div className="relative pb-2">
-                <div className="absolute -left-14 top-1 flex h-5 w-5 items-center justify-center">
-                  <span className={`h-3 w-3 rounded-full ${delivered ? 'bg-green-600' : stage >= 4 ? 'bg-[#4D148C]' : 'bg-gray-300'}`} />
+              {/* TO */}
+              <div className="relative pt-1">
+                <div className="absolute -left-12 top-1.5 flex h-9 w-9 items-center justify-center">
+                  <span
+                    className={`h-3.5 w-3.5 rounded-full ring-4 ring-white ${
+                      delivered ? 'bg-green-600' : stage >= 4 ? 'bg-[#4D148C]' : 'bg-gray-300'
+                    }`}
+                  />
                 </div>
-                <p className={`text-[13px] font-bold uppercase tracking-wide ${delivered ? 'text-green-700' : stage >= 4 ? 'text-gray-900' : 'text-gray-400'}`}>To</p>
-                <p className={`text-[14px] mt-0.5 ${delivered ? 'text-green-700 font-semibold' : stage >= 4 ? 'text-gray-800' : 'text-gray-400'}`}>
+                <p
+                  className={`text-[11px] font-bold uppercase tracking-wider ${
+                    delivered ? 'text-green-700' : stage >= 4 ? 'text-gray-900' : 'text-gray-400'
+                  }`}
+                >
+                  To
+                </p>
+                <p
+                  className={`text-base mt-1 leading-snug ${
+                    delivered
+                      ? 'text-green-700 font-semibold'
+                      : stage >= 4
+                        ? 'text-gray-900 font-semibold'
+                        : 'text-gray-400'
+                  }`}
+                >
                   {result.destination || '—'}
                 </p>
               </div>
             </div>
 
             {!paymentRequired && (setupImage || transitImage || deliveredImage) && (
-              <div className="mt-8">
-                <button type="button" className="flex items-center gap-2 text-sm text-gray-800" onClick={() => setShowImages((v) => !v)}>
+              <div className="mt-8 pt-5 border-t border-gray-100">
+                <button
+                  type="button"
+                  className="flex items-center gap-2 text-sm font-medium text-gray-700"
+                  onClick={() => setShowImages((v) => !v)}
+                >
                   <ChevronDown className={`h-4 w-4 transition-transform ${showImages ? 'rotate-180' : ''}`} />
-                  <span className="underline">{showImages ? 'Hide package photo' : 'Show package photo'}</span>
+                  <span>{showImages ? 'Hide package photo' : 'Show package photo'}</span>
                 </button>
                 {showImages && (
                   <div className="mt-3 space-y-3">
-                    {setupImage && <img src={setupImage} alt="Package" className="w-full rounded-lg border" />}
-                    {transitImage && <img src={transitImage} alt="In transit" className="w-full rounded-lg border" />}
-                    {deliveredImage && <img src={deliveredImage} alt="Delivered" className="w-full rounded-lg border" />}
+                    {setupImage && <img src={setupImage} alt="Package" className="w-full rounded-xl border" />}
+                    {transitImage && <img src={transitImage} alt="In transit" className="w-full rounded-xl border" />}
+                    {deliveredImage && <img src={deliveredImage} alt="Delivered" className="w-full rounded-xl border" />}
                   </div>
                 )}
               </div>
             )}
 
             {result.estimatedDelivery && !paymentRequired && (
-              <p className="mt-6 text-sm text-gray-600">
-                Scheduled delivery: <span className="font-medium text-gray-900">{result.estimatedDelivery}</span>
+              <p className="mt-6 text-sm text-gray-500">
+                Scheduled delivery:{' '}
+                <span className="font-semibold text-gray-900">{result.estimatedDelivery}</span>
               </p>
             )}
           </div>
 
-          <div className="fixed bottom-0 left-0 right-0 max-w-lg mx-auto bg-white border-t px-4 py-3 flex gap-2">
-            <Button asChild variant="outline" className="flex-1">
+          <div className="fixed bottom-0 left-0 right-0 max-w-lg mx-auto bg-white/95 backdrop-blur border-t border-gray-100 px-4 py-3 flex gap-2 safe-area-pb">
+            <Button asChild variant="outline" className="flex-1 h-11">
               <Link to="/">Home</Link>
             </Button>
             <Button
               type="button"
-              className="flex-1 bg-[#FF6200] hover:bg-[#e55a00] text-white"
+              className="flex-1 h-11 bg-[#FF6200] hover:bg-[#e55a00] text-white"
               onClick={() => {
                 setResult(null);
                 setQuery('');
@@ -328,12 +380,13 @@ export default function TrackingPage() {
 }
 
 function Milestone({ label, active, done }: { label: string; active: boolean; done: boolean }) {
+  const on = done || active;
   return (
-    <div className="relative mb-8">
-      <div className="absolute -left-14 top-1 flex h-5 w-5 items-center justify-center">
-        <span className={`h-3 w-3 rounded-full ${done || active ? 'bg-[#4D148C]' : 'bg-gray-300'}`} />
+    <div className="relative mb-10">
+      <div className="absolute -left-12 top-1.5 flex h-9 w-9 items-center justify-center">
+        <span className={`h-3.5 w-3.5 rounded-full ring-4 ring-white ${on ? 'bg-[#4D148C]' : 'bg-gray-300'}`} />
       </div>
-      <p className={`text-[13px] font-bold uppercase tracking-wide ${done || active ? 'text-gray-800' : 'text-gray-400'}`}>{label}</p>
+      <p className={`text-[15px] font-semibold ${on ? 'text-gray-900' : 'text-gray-400'}`}>{label}</p>
     </div>
   );
 }
