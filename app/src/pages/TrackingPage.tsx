@@ -1,6 +1,19 @@
-import { useState, useEffect } from 'react';
+import { useEffect, useMemo, useState } from 'react';
+import { Link, useSearchParams } from 'react-router-dom';
 import { motion } from 'framer-motion';
-import { Search, MapPin, Clock, CheckCircle, Barcode, QrCode } from 'lucide-react';
+import {
+  Search,
+  MapPin,
+  Clock,
+  CheckCircle,
+  Barcode,
+  QrCode,
+  Package,
+  Truck,
+  Copy,
+  Bell,
+  Shield,
+} from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { toast } from 'sonner';
@@ -11,424 +24,351 @@ interface TrackingEvent {
   time: string;
   location: string;
   status: string;
-  completed: boolean;
+  completed?: boolean;
+  details?: string;
 }
 
-const mockTrackingHistory: TrackingEvent[] = [
-  { date: 'Apr 2, 2026', time: '8:45 AM', location: 'New York, NY', status: 'Delivered', completed: true },
-  { date: 'Apr 2, 2026', time: '6:30 AM', location: 'New York, NY', status: 'Out for delivery', completed: true },
-  { date: 'Apr 2, 2026', time: '4:15 AM', location: 'Brooklyn, NY', status: 'At local facility', completed: true },
-  { date: 'Apr 1, 2026', time: '11:20 PM', location: 'Newark, NJ', status: 'Departed facility', completed: true },
-  { date: 'Apr 1, 2026', time: '3:45 PM', location: 'Chicago, IL', status: 'Arrived at facility', completed: true },
-  { date: 'Apr 1, 2026', time: '9:00 AM', location: 'Chicago, IL', status: 'Picked up', completed: true },
-];
+const STEPS = ['Picked up', 'In transit', 'Out for delivery', 'Delivered'] as const;
+
+function stepIndex(status: string) {
+  const s = status.toLowerCase();
+  if (s.includes('deliver')) return 3;
+  if (s.includes('out for')) return 2;
+  if (s.includes('hold') || s.includes('exception')) return 1;
+  if (s.includes('pick') || s.includes('label')) return 0;
+  return 1;
+}
 
 const trackingFeatures = [
   {
     icon: Bell,
-    title: 'Delivery Notifications',
-    description: 'Get alerts via email, text, or the FedEx app when your package is on its way.',
+    title: 'Delivery notifications',
+    description: 'Get alerts when your package moves, is out for delivery, or arrives.',
   },
   {
     icon: MapPin,
-    title: 'Real-Time Location',
-    description: 'See exactly where your package is at any moment with GPS tracking.',
+    title: 'Scan location',
+    description: 'See the latest facility or city from each scan on the shipment.',
   },
   {
     icon: Clock,
-    title: 'Estimated Delivery',
-    description: 'Know when to expect your package with accurate delivery time estimates.',
+    title: 'Estimated delivery',
+    description: 'The date your shipper or admin set for this tracking number.',
   },
   {
     icon: Shield,
-    title: 'Delivery Proof',
-    description: 'View photos and signatures confirming your package was delivered.',
+    title: 'Delivery photo',
+    description: 'If a delivered photo was uploaded, it appears only after delivery.',
   },
 ];
 
 export default function TrackingPage() {
-  const [trackingNumber, setTrackingNumber] = useState('');
+  const [params] = useSearchParams();
+  const [trackingNumber, setTrackingNumber] = useState(params.get('number') || '');
   const [isTracking, setIsTracking] = useState(false);
   const [trackingResult, setTrackingResult] = useState<{
     number: string;
     status: string;
     estimatedDelivery: string;
+    origin?: string;
+    destination?: string;
+    service?: string;
+    location?: string;
     history: TrackingEvent[];
   } | null>(null);
-  const [trackingImage, setTrackingImage] = useState<string | null>(null);
-  const [adminSecret, setAdminSecret] = useState('');
-  const [filePreview, setFilePreview] = useState<string | null>(null);
-  const [uploading, setUploading] = useState(false);
-  const [eventType, setEventType] = useState<'in_transit' | 'delivered' | 'other'>('in_transit');
-  const [isAdminUser, setIsAdminUser] = useState(false);
+  const [setupImage, setSetupImage] = useState<string | null>(null);
+  const [deliveredImage, setDeliveredImage] = useState<string | null>(null);
+
+  const loadImages = async (number: string, status: string) => {
+    setSetupImage(null);
+    setDeliveredImage(null);
+    try {
+      const setup = await fetch(`/api/images?number=${encodeURIComponent(number)}&event=setup`);
+      if (setup.ok) {
+        const j = await setup.json();
+        if (j.found && j.dataUrl) setSetupImage(j.dataUrl);
+      }
+    } catch {
+      /* optional */
+    }
+    if (/deliver/i.test(status)) {
+      try {
+        const delivered = await fetch(`/api/images?number=${encodeURIComponent(number)}&event=delivered`);
+        if (delivered.ok) {
+          const j = await delivered.json();
+          if (j.found && j.dataUrl) setDeliveredImage(j.dataUrl);
+        }
+      } catch {
+        /* optional */
+      }
+    }
+  };
+
+  const trackNumber = async (raw: string) => {
+    const number = raw.trim();
+    if (!number) {
+      toast.error('Enter a tracking number');
+      return;
+    }
+    setIsTracking(true);
+    setTrackingResult(null);
+    try {
+      let result: any = null;
+      const trackRes = await fetch(`/api/track?number=${encodeURIComponent(number)}`);
+      const trackJson = await trackRes.json().catch(() => ({}));
+      if (trackRes.ok && (trackJson.found || trackJson.status)) {
+        result = {
+          number: trackJson.number || number,
+          status: trackJson.status || 'In transit',
+          estimatedDelivery: trackJson.estimatedDelivery || '',
+          origin: trackJson.origin || '',
+          destination: trackJson.destination || '',
+          service: trackJson.service || '',
+          location: trackJson.location || '',
+          history: trackJson.history || [],
+        };
+      } else {
+        const adminRes = await fetch(`/api/admin/shipments?number=${encodeURIComponent(number)}`);
+        const adminJson = await adminRes.json().catch(() => ({}));
+        const shipment = adminJson.shipments?.[0];
+        if (shipment) {
+          result = {
+            number: shipment.number,
+            status: shipment.status,
+            estimatedDelivery: shipment.estimatedDelivery || '',
+            origin: shipment.origin || '',
+            destination: shipment.destination || '',
+            service: shipment.service || '',
+            location: shipment.location || '',
+            history: shipment.history || [],
+          };
+        }
+      }
+      if (!result) {
+        toast.error('No information found for that tracking number');
+        return;
+      }
+      setTrackingResult(result);
+      await loadImages(result.number, result.status);
+    } catch {
+      toast.error('Unable to track right now');
+    } finally {
+      setIsTracking(false);
+    }
+  };
 
   useEffect(() => {
-    try {
-      setIsAdminUser(Boolean(localStorage.getItem('isAdmin')));
-    } catch (e) {
-      setIsAdminUser(false);
+    const n = params.get('number');
+    if (n) {
+      setTrackingNumber(n);
+      trackNumber(n);
     }
-  }, []);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [params]);
 
-  const handleTrack = (e: React.FormEvent) => {
-    e.preventDefault();
-    if (!trackingNumber.trim()) return;
-
-    setIsTracking(true);
-    
-    (async () => {
-      try {
-        const number = trackingNumber.trim();
-        const trackRes = await fetch(`/api/track?number=${encodeURIComponent(number)}`);
-        const trackJson = await trackRes.json().catch(() => ({}));
-        if (trackRes.ok && (trackJson.status || trackJson.found)) {
-          setTrackingResult({ number, status: trackJson.status || 'In transit', estimatedDelivery: trackJson.estimatedDelivery || '', history: trackJson.history || [] });
-        } else {
-          const adminRes = await fetch(`/api/admin/shipments?number=${encodeURIComponent(number)}`);
-          const adminJson = await adminRes.json().catch(() => ({}));
-          const shipment = adminJson.shipments?.[0];
-          if (shipment) setTrackingResult({ number: shipment.number, status: shipment.status, estimatedDelivery: shipment.estimatedDelivery || '', history: shipment.history || [] });
-          else { toast.error('No information found for that tracking number'); setTrackingResult(null); }
-        }
-        const img = await fetch(`/api/get-tracking-image?number=${encodeURIComponent(number)}&event=setup`);
-        if (img.ok) { const j = await img.json(); if (j.found && j.dataUrl) setTrackingImage(j.dataUrl); }
-      } catch { toast.error('Unable to track right now'); setTrackingResult(null); }
-      finally { setIsTracking(false); }
-    })();
-  };
+  const activeStep = useMemo(
+    () => (trackingResult ? stepIndex(trackingResult.status) : 0),
+    [trackingResult]
+  );
+  const isHeld = !!trackingResult && /hold/i.test(trackingResult.status);
 
   return (
     <div className="min-h-screen bg-white">
-      {/* Hero Section */}
-      <section className="bg-fedex-purple py-16 md:py-24">
-        <div className="max-w-4xl mx-auto px-4 sm:px-6 lg:px-8 text-center">
-          <motion.div
-            initial={{ opacity: 0, y: 30 }}
-            animate={{ opacity: 1, y: 0 }}
-            transition={{ duration: 0.6 }}
-          >
-            <h1 className="text-4xl md:text-5xl font-light text-white mb-6">
-              Track your package
-            </h1>
-            <p className="text-lg text-white/80 mb-8">
-              Enter your tracking number to see the status of your shipment in real-time.
-            </p>
-
-            <form onSubmit={handleTrack} className="max-w-2xl mx-auto">
-              <div className="flex flex-col sm:flex-row gap-4">
+      <section className="bg-fedex-purple py-14 md:py-20">
+        <div className="max-w-4xl mx-auto px-4 text-center">
+          <motion.div initial={{ opacity: 0, y: 20 }} animate={{ opacity: 1, y: 0 }}>
+            <h1 className="text-4xl md:text-5xl font-light text-white mb-4">Track your package</h1>
+            <p className="text-white/80 mb-8">Enter a tracking number from your admin shipment or label.</p>
+            <form
+              onSubmit={(e) => {
+                e.preventDefault();
+                trackNumber(trackingNumber);
+              }}
+              className="max-w-2xl mx-auto"
+            >
+              <div className="flex flex-col sm:flex-row gap-3">
                 <div className="flex-1 relative">
-                  <Barcode className="absolute left-4 top-1/2 transform -translate-y-1/2 h-5 w-5 text-gray-400" />
+                  <Barcode className="absolute left-4 top-1/2 -translate-y-1/2 h-5 w-5 text-gray-400" />
                   <Input
-                    type="text"
-                    placeholder="Enter tracking number"
                     value={trackingNumber}
                     onChange={(e) => setTrackingNumber(e.target.value)}
-                    className="w-full pl-12 py-6 text-lg"
+                    placeholder="Enter tracking number"
+                    className="w-full pl-12 py-6 text-lg bg-white"
                   />
                 </div>
-                <Button
-                  type="submit"
-                  disabled={isTracking}
-                  className="bg-fedex-orange hover:bg-fedex-orange-dark text-white font-semibold uppercase tracking-wide px-8 py-6"
-                >
-                  {isTracking ? (
-                    <motion.div
-                      animate={{ rotate: 360 }}
-                      transition={{ duration: 1, repeat: Infinity, ease: 'linear' }}
-                      className="w-5 h-5 border-2 border-white border-t-transparent rounded-full"
-                    />
-                  ) : (
-                    <>
-                      <Search className="mr-2 h-5 w-5" />
-                      Track
-                    </>
-                  )}
+                <Button type="submit" disabled={isTracking} className="bg-fedex-orange hover:bg-fedex-orange-dark text-white uppercase font-semibold px-8 py-6">
+                  {isTracking ? 'Tracking…' : (<><Search className="mr-2 h-5 w-5" />Track</>)}
                 </Button>
               </div>
             </form>
-
-            <div className="mt-6 flex flex-wrap justify-center gap-4 text-sm text-white/60">
-              <button className="hover:text-white transition-colors flex items-center">
-                <QrCode className="h-4 w-4 mr-2" />
-                Scan QR Code
-              </button>
+            <div className="mt-6 flex flex-wrap justify-center gap-4 text-sm text-white/70">
+              <Link to="/tracking/scan" className="hover:text-white inline-flex items-center gap-2"><QrCode className="h-4 w-4" />Scan barcode</Link>
               <span>|</span>
-              <button className="hover:text-white transition-colors">
-                Track by Reference Number
-              </button>
+              <Link to="/tracking/reference" className="hover:text-white">Track by reference</Link>
               <span>|</span>
-              <button className="hover:text-white transition-colors">
-                Track Multiple Packages
-              </button>
+              <Link to="/tracking/multiple" className="hover:text-white">Track multiple packages</Link>
             </div>
           </motion.div>
         </div>
       </section>
 
-      {/* Tracking Results */}
       {trackingResult && (
-        <section className="py-12 bg-fedex-gray">
-          <div className="max-w-4xl mx-auto px-4 sm:px-6 lg:px-8">
-            <motion.div
-              initial={{ opacity: 0, y: 20 }}
-              animate={{ opacity: 1, y: 0 }}
-              className="bg-white rounded-lg shadow-lg overflow-hidden"
-            >
-              {/* Status Header */}
-              <div className="bg-fedex-purple p-6">
-                <div className="flex items-center justify-between">
+        <section className="py-10 bg-[#f4f4f4]">
+          <div className="max-w-4xl mx-auto px-4">
+            <motion.div initial={{ opacity: 0, y: 16 }} animate={{ opacity: 1, y: 0 }} className="bg-white rounded-lg shadow-lg overflow-hidden">
+              <div className="bg-fedex-purple p-6 text-white">
+                <div className="flex flex-wrap justify-between gap-4">
                   <div>
-                    <p className="text-white/60 text-sm mb-1">Tracking Number</p>
-                    <p className="text-white text-xl font-semibold">{trackingResult.number}</p>
-                  </div>
-                  <div className="text-right">
-                    <p className="text-white/60 text-sm mb-1">Status</p>
-                    <div className="flex items-center text-white">
-                      <CheckCircle className="h-5 w-5 mr-2 text-green-400" />
-                      <span className="text-xl font-semibold">{trackingResult.status}</span>
+                    <p className="text-white/60 text-xs uppercase tracking-wide">Tracking ID</p>
+                    <div className="flex items-center gap-2">
+                      <p className="text-xl font-semibold">{trackingResult.number}</p>
+                      <button
+                        type="button"
+                        onClick={() => {
+                          navigator.clipboard.writeText(trackingResult.number);
+                          toast.success('Copied');
+                        }}
+                        className="text-white/70 hover:text-white"
+                      >
+                        <Copy className="h-4 w-4" />
+                      </button>
                     </div>
                   </div>
-                </div>
-                  <div className="mt-4 pt-4 border-t border-white/20 flex items-center justify-between gap-4">
-                    <p className="text-white/60 text-sm">{trackingResult.estimatedDelivery}</p>
-                    {trackingImage && (
-                      <div className="ml-4">
-                        <p className="text-white/60 text-sm mb-1">Image of goods</p>
-                        <img src={trackingImage} alt="Image of goods" className="h-20 rounded-md object-cover border border-white/20" />
-                      </div>
-                    )}
-                    {/* Admin upload control: render only for admin users */}
-                    {isAdminUser && (
-                      <div className="ml-6">
-                        <p className="text-white/60 text-sm mb-1">Admin upload</p>
-                        <div className="flex items-center gap-2">
-                          <input id="tracking-image-upload" type="file" accept="image/*" className="rounded-md" />
-                          <select value={eventType} onChange={(e) => setEventType(e.target.value as any)} className="rounded-md px-2 py-2 border">
-                            <option value="in_transit">In Transit</option>
-                            <option value="delivered">Delivered (Proof of Delivery)</option>
-                            <option value="other">Other</option>
-                          </select>
-                          <Input placeholder="Admin secret" value={adminSecret} onChange={(e) => setAdminSecret(e.target.value)} />
-                          <Button
-                            onClick={async () => {
-                              const input = document.getElementById('tracking-image-upload') as HTMLInputElement | null;
-                              const file = input?.files?.[0];
-                              if (!file) { toast.error('Select an image file'); return; }
-                              if (!adminSecret.trim()) { toast.error('Enter admin secret'); return; }
-                              setUploading(true);
-                              const reader = new FileReader();
-                              reader.onload = async () => {
-                                const dataUrl = reader.result as string;
-                                try {
-                                  const resp = await fetch('/api/upload-tracking-image', {
-                                    method: 'POST',
-                                    headers: {
-                                      'Content-Type': 'application/json',
-                                      'x-admin-secret': adminSecret,
-                                    },
-                                    body: JSON.stringify({ trackingNumber: trackingResult.number, dataUrl, eventType }),
-                                  });
-                                  const json = await resp.json();
-                                  if (!resp.ok) { toast.error(json?.error || 'Upload failed'); return; }
-                                  setFilePreview(dataUrl);
-                                  setTrackingImage(dataUrl);
-                                  toast.success('Image uploaded and attached to tracking number');
-                                  if (input) input.value = '';
-                                } catch (err) {
-                                  console.error(err);
-                                  toast.error('Upload error');
-                                } finally {
-                                  setUploading(false);
-                                }
-                              };
-                              reader.readAsDataURL(file);
-                            }}
-                            disabled={uploading}
-                            className="bg-fedex-orange text-white"
-                          >
-                            {uploading ? 'Uploading…' : 'Attach'}
-                          </Button>
-                        </div>
-                        {filePreview && <img src={filePreview} alt="preview" className="h-12 rounded-md mt-2" />}
-                      </div>
-                    )}
+                  <div className="text-right">
+                    <p className="text-white/60 text-xs uppercase tracking-wide">Status</p>
+                    <p className="text-xl font-semibold flex items-center justify-end gap-2">
+                      {/deliver/i.test(trackingResult.status) ? <CheckCircle className="h-5 w-5 text-green-300" /> : <Truck className="h-5 w-5 text-fedex-orange" />}
+                      {trackingResult.status}
+                    </p>
                   </div>
+                </div>
+                <div className="mt-4 grid sm:grid-cols-3 gap-3 text-sm text-white/80">
+                  <p><span className="text-white/50">From</span><br />{trackingResult.origin || '—'}</p>
+                  <p><span className="text-white/50">To</span><br />{trackingResult.destination || '—'}</p>
+                  <p><span className="text-white/50">Service</span><br />{trackingResult.service || '—'}</p>
+                </div>
+                {trackingResult.estimatedDelivery && (
+                  <p className="mt-4 text-sm text-white/80">Scheduled delivery: {trackingResult.estimatedDelivery}</p>
+                )}
               </div>
 
-              {/* Progress Bar */}
+              {isHeld && (
+                <div className="px-6 py-3 bg-amber-50 text-amber-900 text-sm border-b">
+                  This shipment is on hold. You can request a hold or release from{' '}
+                  <Link className="underline" to="/delivery-manager/hold">Delivery Manager</Link>.
+                </div>
+              )}
+
               <div className="px-6 py-6">
-                <div className="relative">
-                  <div className="flex justify-between mb-2">
-                    {['Picked Up', 'In Transit', 'Out for Delivery', 'Delivered'].map((step, index) => (
-                      <div key={step} className="flex flex-col items-center">
+                <div className="relative flex justify-between">
+                  {STEPS.map((step, index) => {
+                    const done = index <= activeStep;
+                    return (
+                      <div key={step} className="flex-1 flex flex-col items-center z-10">
                         <div className={`w-8 h-8 rounded-full flex items-center justify-center mb-2 ${
-                          index <= 3 ? 'bg-fedex-purple text-white' : 'bg-gray-200 text-gray-400'
+                          done ? 'bg-fedex-purple text-white' : 'bg-gray-200 text-gray-400'
                         }`}>
-                          {index <= 3 ? (
-                            <CheckCircle className="h-5 w-5" />
-                          ) : (
-                            <span className="text-sm">{index + 1}</span>
-                          )}
+                          {done ? <CheckCircle className="h-4 w-4" /> : index + 1}
                         </div>
-                        <span className={`text-xs ${index <= 3 ? 'text-gray-900' : 'text-gray-400'}`}>
-                          {step}
-                        </span>
+                        <span className={`text-xs text-center ${done ? 'text-gray-900' : 'text-gray-400'}`}>{step}</span>
+                      </div>
+                    );
+                  })}
+                  <div className="absolute top-4 left-[12%] right-[12%] h-1 bg-gray-200">
+                    <div className="h-full bg-fedex-purple" style={{ width: `${(activeStep / (STEPS.length - 1)) * 100}%` }} />
+                  </div>
+                </div>
+              </div>
+
+              {(setupImage || deliveredImage) && (
+                <div className="px-6 pb-6 grid sm:grid-cols-2 gap-4">
+                  {setupImage && (
+                    <div>
+                      <p className="text-sm font-medium mb-2">Package photo</p>
+                      <img src={setupImage} alt="Package" className="w-full max-h-56 object-cover rounded-md border" />
+                    </div>
+                  )}
+                  {deliveredImage && (
+                    <div>
+                      <p className="text-sm font-medium mb-2">Proof of delivery</p>
+                      <img src={deliveredImage} alt="Delivered" className="w-full max-h-56 object-cover rounded-md border" />
+                    </div>
+                  )}
+                </div>
+              )}
+
+              <div className="px-6 pb-8">
+                <h3 className="text-lg font-semibold mb-4">Travel history</h3>
+                {trackingResult.history?.length ? (
+                  <div className="space-y-0">
+                    {trackingResult.history.map((event, index) => (
+                      <div key={`${event.status}-${index}`} className="flex gap-4">
+                        <div className="flex flex-col items-center">
+                          <div className="w-3 h-3 rounded-full bg-fedex-purple mt-1.5" />
+                          {index < trackingResult.history.length - 1 && <div className="w-px flex-1 bg-gray-200" />}
+                        </div>
+                        <div className="pb-5">
+                          <p className="font-semibold text-gray-900">{event.status}</p>
+                          <p className="text-sm text-gray-600">{event.location}</p>
+                          <p className="text-xs text-gray-400">{event.date}{event.time ? ` · ${event.time}` : ''}</p>
+                          {event.details && <p className="text-xs text-gray-500 mt-1">{event.details}</p>}
+                        </div>
                       </div>
                     ))}
                   </div>
-                  <div className="absolute top-4 left-0 right-0 h-1 bg-gray-200 -z-10">
-                    <div className="h-full bg-fedex-purple" style={{ width: '100%' }} />
-                  </div>
-                </div>
+                ) : (
+                  <p className="text-sm text-gray-500">No scan events yet. Status is {trackingResult.status}{trackingResult.location ? ` at ${trackingResult.location}` : ''}.</p>
+                )}
               </div>
 
-              {/* Tracking History */}
-              <div className="px-6 pb-6">
-                <h3 className="text-lg font-semibold text-gray-900 mb-4">Shipment History</h3>
-                <div className="space-y-4">
-                  {trackingResult.history.map((event, index) => (
-                    <div key={index} className="flex items-start">
-                      <div className="flex-shrink-0 w-10">
-                        <div className="w-3 h-3 bg-fedex-purple rounded-full mt-1.5" />
-                        {index < trackingResult.history.length - 1 && (
-                          <div className="w-0.5 h-full bg-gray-200 ml-1.5 mt-1" />
-                        )}
-                      </div>
-                      <div className="flex-1 pb-4">
-                        <p className="font-semibold text-gray-900">{event.status}</p>
-                        <p className="text-sm text-gray-500">{event.location}</p>
-                        <p className="text-xs text-gray-400">{event.date} at {event.time}</p>
-                      </div>
-                    </div>
-                  ))}
-                </div>
+              <div className="px-6 py-4 border-t bg-gray-50 flex flex-wrap gap-3">
+                <Button asChild variant="outline"><Link to="/delivery-manager/hold">Hold at location</Link></Button>
+                <Button asChild variant="outline"><Link to="/delivery-manager/instructions">Delivery instructions</Link></Button>
+                <Button asChild variant="outline"><Link to="/support">Get help</Link></Button>
               </div>
             </motion.div>
           </div>
         </section>
       )}
 
-      {/* Tracking Features */}
-      <section className="py-16 md:py-20">
-        <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
+      <section className="py-16">
+        <div className="max-w-7xl mx-auto px-4">
           <FadeInOnScroll>
-            <h2 className="text-3xl md:text-4xl font-light text-gray-900 text-center mb-4">
-              Stay informed every step of the way
-            </h2>
-            <p className="text-gray-600 text-center mb-12 max-w-2xl mx-auto">
-              Our advanced tracking technology keeps you updated on your package's journey 
-              from pickup to delivery.
-            </p>
+            <h2 className="text-3xl font-light text-center mb-10">Stay informed every step of the way</h2>
           </FadeInOnScroll>
-
           <div className="grid md:grid-cols-2 lg:grid-cols-4 gap-6">
             {trackingFeatures.map((feature, index) => (
-              <FadeInOnScroll key={feature.title} delay={index * 0.1}>
-                <motion.div
-                  whileHover={{ y: -4 }}
-                  className="bg-white border border-gray-200 rounded-lg p-6 text-center hover:border-fedex-purple hover:shadow-card transition-all"
-                >
+              <FadeInOnScroll key={feature.title} delay={index * 0.08}>
+                <div className="border rounded-lg p-6 text-center hover:border-fedex-purple hover:shadow-md transition-all">
                   <div className="w-14 h-14 mx-auto mb-4 bg-fedex-purple/10 rounded-full flex items-center justify-center">
                     <feature.icon className="h-7 w-7 text-fedex-purple" />
                   </div>
-                  <h3 className="text-lg font-semibold text-gray-900 mb-2">{feature.title}</h3>
+                  <h3 className="font-semibold mb-2">{feature.title}</h3>
                   <p className="text-sm text-gray-600">{feature.description}</p>
-                </motion.div>
+                </div>
               </FadeInOnScroll>
             ))}
           </div>
         </div>
       </section>
 
-      {/* FedEx Delivery Manager */}
-      <section className="py-16 bg-fedex-gray">
-        <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
-          <div className="grid lg:grid-cols-2 gap-12 items-center">
-            <FadeInOnScroll>
-              <h2 className="text-3xl md:text-4xl font-light text-gray-900 mb-6">
-                FedEx Delivery Manager®
-              </h2>
-              <p className="text-lg text-gray-600 mb-6">
-                Take control of your deliveries. Customize when and where your packages arrive 
-                with our free delivery management tool.
-              </p>
-              <ul className="space-y-3 mb-8">
-                {[
-                  'Schedule deliveries for when you\'re home',
-                  'Redirect packages to a different address',
-                  'Hold packages at a FedEx location',
-                  'Request vacation hold',
-                  'Provide delivery instructions',
-                ].map((item) => (
-                  <li key={item} className="flex items-start text-gray-600">
-                    <CheckCircle className="h-5 w-5 text-fedex-purple mr-2 flex-shrink-0 mt-0.5" />
-                    {item}
-                  </li>
-                ))}
-              </ul>
-              <Button className="bg-fedex-purple hover:bg-fedex-purple-dark text-white font-semibold uppercase tracking-wide px-8 py-6">
-                Sign Up Free
-              </Button>
-            </FadeInOnScroll>
-            <FadeInOnScroll direction="left">
-              <img
-                src="/images/delivery-manager.jpg"
-                alt="FedEx Delivery Manager"
-                className="rounded-lg shadow-lg"
-              />
-            </FadeInOnScroll>
+      <section className="py-16 bg-[#f4f4f4]">
+        <div className="max-w-7xl mx-auto px-4 grid lg:grid-cols-2 gap-12 items-center">
+          <div>
+            <h2 className="text-3xl font-light mb-4">FedEx Delivery Manager</h2>
+            <p className="text-gray-600 mb-6">Hold, redirect, or add instructions for a delivery tied to your tracking number.</p>
+            <ul className="space-y-2 mb-6 text-gray-600">
+              {['Hold a package at a location', 'Add delivery instructions', 'Get delivery updates', 'Redirect a shipment'].map((item) => (
+                <li key={item} className="flex gap-2"><CheckCircle className="h-5 w-5 text-fedex-purple" />{item}</li>
+              ))}
+            </ul>
+            <Button asChild className="bg-fedex-purple text-white"><Link to="/login">Sign in to manage</Link></Button>
           </div>
-        </div>
-      </section>
-
-      {/* Mobile App */}
-      <section className="py-16 md:py-20">
-        <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
-          <div className="grid lg:grid-cols-2 gap-12 items-center">
-            <FadeInOnScroll>
-              <img
-                src="/images/apple-watch.jpg"
-                alt="FedEx Mobile App"
-                className="rounded-lg shadow-lg"
-              />
-            </FadeInOnScroll>
-            <FadeInOnScroll direction="left">
-              <h2 className="text-3xl md:text-4xl font-light text-gray-900 mb-6">
-                Track on the go
-              </h2>
-              <p className="text-lg text-gray-600 mb-6">
-                Download the FedEx Mobile app to track packages, get notifications, 
-                and manage deliveries from your smartphone or smartwatch.
-              </p>
-              <div className="flex flex-wrap gap-4">
-                <Button className="bg-black hover:bg-gray-800 text-white font-semibold px-6 py-6">
-                  Download for iOS
-                </Button>
-                <Button className="bg-black hover:bg-gray-800 text-white font-semibold px-6 py-6">
-                  Download for Android
-                </Button>
-              </div>
-            </FadeInOnScroll>
+          <div className="flex items-center justify-center h-56 bg-white border rounded-lg">
+            <Package className="h-16 w-16 text-fedex-purple" />
           </div>
         </div>
       </section>
     </div>
-  );
-}
-
-// Additional icons
-function Bell({ className }: { className?: string }) {
-  return (
-    <svg className={className} fill="none" viewBox="0 0 24 24" stroke="currentColor">
-      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15 17h5l-1.405-1.405A2.032 2.032 0 0118 14.158V11a6.002 6.002 0 00-4-5.659V5a2 2 0 10-4 0v.341C7.67 6.165 6 8.388 6 11v3.159c0 .538-.214 1.055-.595 1.436L4 17h5m6 0v1a3 3 0 11-6 0v-1m6 0H9" />
-    </svg>
-  );
-}
-
-function Shield({ className }: { className?: string }) {
-  return (
-    <svg className={className} fill="none" viewBox="0 0 24 24" stroke="currentColor">
-      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 12l2 2 4-4m5.618-4.016A11.955 11.955 0 0112 2.944a11.955 11.955 0 01-8.618 3.04A12.02 12.02 0 003 9c0 5.591 3.824 10.29 9 11.622 5.176-1.332 9-6.03 9-11.622 0-1.042-.133-2.052-.382-3.016z" />
-    </svg>
   );
 }
