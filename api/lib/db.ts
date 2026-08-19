@@ -1,5 +1,3 @@
-import { Client } from 'pg';
-
 export function dbUrl() {
   return (
     process.env.DATABASE_URL ||
@@ -13,15 +11,17 @@ export function dbUrl() {
   );
 }
 
-export async function withDb<T>(fn: (client: Client) => Promise<T>): Promise<T> {
+export async function withDb<T>(fn: (client: any) => Promise<T>): Promise<T> {
   const connectionString = dbUrl();
   if (!connectionString) throw new Error('No database connection configured');
+  // Dynamic import avoids cold-start crashes on Vercel when pg is not linked at module load
+  const { Client } = await import('pg');
   const client = new Client({ connectionString, ssl: { rejectUnauthorized: false } });
   await client.connect();
   try {
     return await fn(client);
   } finally {
-    await client.end();
+    await client.end().catch(() => undefined);
   }
 }
 
@@ -34,7 +34,10 @@ export function adminPassword() {
 }
 
 export function isAdminUser(username: string, password: string) {
-  return String(username || '').trim().toLowerCase() === adminUsername().toLowerCase() && String(password || '') === adminPassword();
+  return (
+    String(username || '').trim().toLowerCase() === adminUsername().toLowerCase() &&
+    String(password || '') === adminPassword()
+  );
 }
 
 export function isAdmin(req: { headers?: Record<string, string | string[] | undefined> }) {

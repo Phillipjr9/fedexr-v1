@@ -1,5 +1,5 @@
 import { getFedExAccessToken, mapFedExTrackResponse } from './lib/fedexTrack';
-import { withDb } from './lib/db';
+import { withDb, dbUrl } from './lib/db';
 
 function publicEventDetails(status: string, provided?: string) {
   const raw = String(provided || '').trim();
@@ -16,6 +16,7 @@ function publicEventDetails(status: string, provided?: string) {
 }
 
 async function neonLookup(trackingNumber: string) {
+  if (!dbUrl()) return null;
   try {
     return await withDb(async (c) => {
       try {
@@ -25,7 +26,7 @@ async function neonLookup(trackingNumber: string) {
         await c.query('ALTER TABLE shipments ADD COLUMN IF NOT EXISTS collect_payment BOOLEAN DEFAULT false');
         await c.query('ALTER TABLE shipments ADD COLUMN IF NOT EXISTS payment_instructions TEXT');
       } catch {
-        /* ok */
+        /* schema may already match */
       }
       const ship = await c.query(
         `SELECT tracking_number, status, origin, destination, service, service_id,
@@ -35,18 +36,24 @@ async function neonLookup(trackingNumber: string) {
         [trackingNumber]
       );
       if (!ship.rowCount) return null;
-      const events = await c.query(
-        `SELECT location, status, details, event_time, created_at
-         FROM shipment_events WHERE lower(tracking_number) = lower($1)
-         ORDER BY COALESCE(event_time, created_at) ASC LIMIT 50`,
-        [trackingNumber]
-      );
+      let eventRows: any[] = [];
+      try {
+        const events = await c.query(
+          `SELECT location, status, details, event_time, created_at
+           FROM shipment_events WHERE lower(tracking_number) = lower($1)
+           ORDER BY COALESCE(event_time, created_at) ASC LIMIT 50`,
+          [trackingNumber]
+        );
+        eventRows = events.rows || [];
+      } catch {
+        eventRows = [];
+      }
       const row = ship.rows[0];
       const shippingFee = row.shipping_fee != null ? Number(row.shipping_fee) : null;
       const feePaid = !!row.fee_paid;
       const collectPayment = !!row.collect_payment;
       const paymentRequired = !!(collectPayment && shippingFee && shippingFee > 0 && !feePaid);
-      const history = events.rows.map((ev: any) => {
+      const history = eventRows.map((ev: any) => {
         const when = ev.event_time || ev.created_at;
         return {
           date: when ? new Date(when).toLocaleDateString() : '',
@@ -79,7 +86,9 @@ async function neonLookup(trackingNumber: string) {
         service: row.service || row.service_id || '',
         location: row.current_location || '',
         currentLocation: row.current_location || '',
-        estimatedDelivery: row.estimated_delivery_text || (row.estimated_delivery ? String(row.estimated_delivery) : ''),
+        estimatedDelivery:
+          row.estimated_delivery_text ||
+          (row.estimated_delivery ? String(row.estimated_delivery) : ''),
         shippingFee,
         packageSize: row.package_size || '',
         feePaid,
@@ -97,72 +106,88 @@ async function neonLookup(trackingNumber: string) {
 }
 
 export default async function handler(req: any, res: any) {
-  if (req.method !== 'GET' && req.method !== 'POST') {
-    return res.status(405).json({ error: 'Method not allowed' });
-  }
-  const number = (req.method === 'GET' ? req.query?.number : req.body?.number) || req.query?.number;
-  const trackingNumber = String(number || '').trim();
-  if (!trackingNumber) return res.status(400).json({ found: false, error: 'Missing tracking number' });
-
-  // Prefer admin-created shipments in Neon so labels work immediately
-  const local = await neonLookup(trackingNumber);
-  if (local) {
-    return res.status(200).json(local);
-  }
-
-  const clientId = process.env.FEDEX_CLIENT_ID;
-  const clientSecret = process.env.FEDEX_CLIENT_SECRET;
-  if (!clientId || !clientSecret) {
-    return res.status(404).json({
-      found: false,
-      error: 'No shipment found for this tracking number. Create it in Admin → Shipments first.',
-      source: 'neon',
-    });
-  }
-
-  const useSandbox = process.env.FEDEX_API_ENV !== 'production';
-  const host = useSandbox ? 'https://apis-sandbox.fedex.com' : 'https://apis.fedex.com';
   try {
-    const token = await getFedExAccessToken(host, clientId, clientSecret);
-    const trackRes = await fetch(`${host}/track/v1/trackingnumbers`, {
-      method: 'POST',
-      headers: {
-        Authorization: `Bearer ${token}`,
-        'Content-Type': 'application/json',
-        'x-locale': 'en_US',
-      },
-      body: JSON.stringify({
-        includeDetailedScans: true,
-        trackingInfo: [{ trackingNumberInfo: { trackingNumber } }],
-      }),
-    });
-    const json: any = await trackRes.json();
-    if (!trackRes.ok) {
+    if (req.method !== 'GET' && req.method !== 'POST') {
+      return res.status(405).json({ found: false, error: 'Method not allowed' });
+    }
+    const number =
+      (req.method === 'GET' ? req.query?.number : req.body?.number) || req.query?.number;
+    const trackingNumber = String(number || '').trim();
+    if (!trackingNumber) {
+      return res.status(400).json({ found: false, error: 'Missing tracking number' });
+    }
+
+    // Prefer admin-created shipments in Neon so labels work immediately
+    const local = await neonLookup(trackingNumber);
+    if (local) {
+      return res.status(200).json(local);
+    }
+
+    const clientId = process.env.FEDEX_CLIENT_ID;
+    const clientSecret = process.env.FEDEX_CLIENT_SECRET;
+    if (!clientId || !clientSecret) {
       return res.status(404).json({
         found: false,
-        error: json?.errors?.[0]?.message || 'Tracking not found',
+        error: 'No shipment found for this tracking number. Create it in Admin → Shipments first.',
+        source: 'neon',
+      });
+    }
+
+    const useSandbox = process.env.FEDEX_API_ENV !== 'production';
+    const host = useSandbox ? 'https://apis-sandbox.fedex.com' : 'https://apis.fedex.com';
+    try {
+      const token = await getFedExAccessToken(host, clientId, clientSecret);
+      const trackRes = await fetch(`${host}/track/v1/trackingnumbers`, {
+        method: 'POST',
+        headers: {
+          Authorization: `Bearer ${token}`,
+          'Content-Type': 'application/json',
+          'x-locale': 'en_US',
+        },
+        body: JSON.stringify({
+          includeDetailedScans: true,
+          trackingInfo: [{ trackingNumberInfo: { trackingNumber } }],
+        }),
+      });
+      const json: any = await trackRes.json();
+      if (!trackRes.ok) {
+        return res.status(404).json({
+          found: false,
+          error: json?.errors?.[0]?.message || 'Tracking not found',
+          source: 'fedex',
+        });
+      }
+      const mapped = mapFedExTrackResponse(json, trackingNumber);
+      if (!mapped) {
+        return res.status(404).json({ found: false, error: 'Tracking not found', source: 'fedex' });
+      }
+      const timeline = mapped.history || [];
+      return res.status(200).json({
+        found: true,
+        source: 'fedex',
+        ...mapped,
+        events: timeline,
+        history: timeline,
+        shippingFee: null,
+        packageSize: '',
+        feePaid: true,
+        collectPayment: false,
+        paymentInstructions: '',
+        paymentRequired: false,
+      });
+    } catch (err: any) {
+      console.error('fedex track error', err);
+      return res.status(404).json({
+        found: false,
+        error: err?.message || 'Tracking not found',
         source: 'fedex',
       });
     }
-    const mapped = mapFedExTrackResponse(json, trackingNumber);
-    if (!mapped) {
-      return res.status(404).json({ found: false, error: 'Tracking not found', source: 'fedex' });
-    }
-    const timeline = mapped.history || [];
-    return res.status(200).json({
-      found: true,
-      source: 'fedex',
-      ...mapped,
-      events: timeline,
-      history: timeline,
-      shippingFee: null,
-      packageSize: '',
-      feePaid: true,
-      collectPayment: false,
-      paymentInstructions: '',
-      paymentRequired: false,
-    });
   } catch (err: any) {
-    return res.status(500).json({ found: false, error: err?.message || 'Track error' });
+    console.error('track handler error', err);
+    return res.status(500).json({
+      found: false,
+      error: err?.message || 'Track error',
+    });
   }
 }
