@@ -4,7 +4,7 @@ import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { toast } from 'sonner';
 import { FEDEX_SERVICES, generateTrackingNumber, geocodePlaces, fetchRoute, type Place } from '@/lib/places';
-import { HOLD_REASONS } from '@/lib/holdReasons';
+import { HOLD_REASON_LABELS } from '@/lib/holdReasons';
 import { PACKAGE_SIZES, formatFee, quoteFee } from '@/lib/shippingRates';
 import { apiAddEvent, apiDeleteShipment, apiListShipments, apiSaveShipment, apiUploadImage, type ImageEventType } from '@/lib/adminApi';
 import { Camera, Pencil, Search, Truck, X } from 'lucide-react';
@@ -83,7 +83,7 @@ export default function AdminShipments() {
   const [route, setRoute] = useState<{ stops: Place[]; miles?: number } | null>(null);
   const [pin, setPin] = useState('');
   const [routing, setRouting] = useState(false);
-  const [holdReason, setHoldReason] = useState(HOLD_REASONS[0]);
+  const [holdReason, setHoldReason] = useState(HOLD_REASON_LABELS[0]);
   const [holdOther, setHoldOther] = useState('');
   const [editing, setEditing] = useState(false);
   const [editStatus, setEditStatus] = useState('In transit');
@@ -368,7 +368,7 @@ export default function AdminShipments() {
           {scene.id === 'hold' && (
             <div className="bg-amber-50 border border-amber-200 rounded-xl p-5 space-y-3">
               <select className="w-full border rounded h-10 px-2 bg-white" value={holdReason} onChange={(e) => setHoldReason(e.target.value)}>
-                {HOLD_REASONS.map((r) => <option key={r}>{r}</option>)}
+                {HOLD_REASON_LABELS.map((r) => <option key={r}>{r}</option>)}
               </select>
               {holdReason === 'Other' && <Input value={holdOther} onChange={(e) => setHoldOther(e.target.value)} placeholder="Type the full reason" />}
             </div>
