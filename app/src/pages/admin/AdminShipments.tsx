@@ -2,82 +2,52 @@ import { useEffect, useMemo, useState } from 'react';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { toast } from 'sonner';
-import { FEDEX_SERVICES, generateTrackingNumber, geocodePlaces } from '@/lib/places';
+import { FEDEX_SERVICES, generateTrackingNumber, geocodePlaces, fetchRoute, type Place } from '@/lib/places';
 import { apiAddEvent, apiDeleteShipment, apiListShipments, apiSaveShipment, apiUploadImage } from '@/lib/adminApi';
 import { Copy, RefreshCw, Sparkles, Truck } from 'lucide-react';
 
-const HUBS = [
-  'Memphis, TN US',
-  'Indianapolis, IN US',
-  'Newark, NJ US',
-  'Chicago, IL US',
-  'Dallas, TX US',
-  'Atlanta, GA US',
-  'Oakland, CA US',
-  'Los Angeles, CA US',
-];
-
 const SCENES = [
-  { id: 'label', label: 'Just created', rank: 0, hint: 'Label only — nothing scanned yet' },
-  { id: 'picked', label: 'We have it', rank: 1, hint: 'Picked up at origin' },
-  { id: 'transit', label: 'On the way', rank: 2, hint: 'Moving through hubs' },
-  { id: 'ofd', label: 'Out for delivery', rank: 3, hint: 'On a truck today' },
-  { id: 'delivered', label: 'Delivered', rank: 4, hint: 'Show as delivered' },
+  { id: 'label', label: 'Just created', rank: 0, hint: 'Label only' },
+  { id: 'picked', label: 'We have it', rank: 1, hint: 'Picked up' },
+  { id: 'transit', label: 'On the way', rank: 2, hint: 'On the computed route' },
+  { id: 'ofd', label: 'Out for delivery', rank: 3, hint: 'Local truck' },
+  { id: 'delivered', label: 'Delivered', rank: 4, hint: 'Done' },
+  { id: 'hold', label: 'Stop here', rank: 2, hint: 'Hold at a route stop', hold: true },
 ];
 
 function hoursAgo(h: number) {
-  const d = new Date(Date.now() - h * 3600_000);
-  return d;
+  return new Date(Date.now() - h * 3600_000);
 }
-
 function eta(service: string) {
-  const days = /overnight|same|first/i.test(service) ? 1 : /2day/i.test(service) ? 2 : /saver/i.test(service) ? 3 : 5;
-  const d = new Date();
-  d.setDate(d.getDate() + (days === 1 && /same|first/i.test(service) ? 0 : days));
   if (/same|first/i.test(service)) return 'Today · By end of day';
+  const days = /overnight/i.test(service) ? 1 : /2day/i.test(service) ? 2 : /saver/i.test(service) ? 3 : 5;
+  const d = new Date(); d.setDate(d.getDate() + days);
   return d.toLocaleDateString('en-US', { weekday: 'short', month: 'short', day: 'numeric' });
-}
-
-function hubsBetween(origin: string, dest: string) {
-  const skip = (s: string) => origin.toLowerCase().includes(s.split(',')[0].toLowerCase()) || dest.toLowerCase().includes(s.split(',')[0].toLowerCase());
-  return HUBS.filter((h) => !skip(h)).slice(0, 2);
-}
-
-function buildStory(origin: string, dest: string, rank: number) {
-  const hops = hubsBetween(origin, dest);
-  const story: { status: string; location: string; details: string; hoursAgo: number }[] = [
-    { status: 'Label created', location: origin, details: 'Shipping label created', hoursAgo: 36 },
-  ];
-  if (rank >= 1) story.push({ status: 'Picked up', location: origin, details: 'We have your package', hoursAgo: 30 });
-  if (rank >= 2) {
-    hops.forEach((hub, i) => {
-      story.push({ status: i === 0 ? 'Arrived at facility' : 'In transit', location: hub, details: 'On the way', hoursAgo: 18 - i * 6 });
-    });
-    story.push({ status: 'In transit', location: hops[0] || origin, details: 'On the way', hoursAgo: 6 });
-  }
-  if (rank >= 3) story.push({ status: 'Out for delivery', location: dest, details: 'On a local truck', hoursAgo: 2 });
-  if (rank >= 4) story.push({ status: 'Delivered', location: dest, details: 'Delivered', hoursAgo: 0.5 });
-  return story;
 }
 
 function PlaceInput({ value, onChange, placeholder }: { value: string; onChange: (v: string) => void; placeholder: string }) {
   const [open, setOpen] = useState(false);
-  const [list, setList] = useState<string[]>([]);
+  const [list, setList] = useState<Place[]>([]);
   useEffect(() => {
     const q = value.trim();
-    if (q.length < 2) { setList([]); return; }
+    if (q.length < 3) { setList([]); return; }
     const t = setTimeout(async () => {
       try { setList(await geocodePlaces(q)); } catch { setList([]); }
-    }, 250);
+    }, 280);
     return () => clearTimeout(t);
   }, [value]);
   return (
     <div className="relative">
       <Input value={value} placeholder={placeholder} onChange={(e) => { onChange(e.target.value); setOpen(true); }} onFocus={() => setOpen(true)} onBlur={() => setTimeout(() => setOpen(false), 120)} autoComplete="off" />
       {open && list.length > 0 && (
-        <ul className="absolute z-20 w-full bg-white border rounded-md shadow max-h-40 overflow-auto text-sm">
+        <ul className="absolute z-20 w-full bg-white border rounded-md shadow max-h-48 overflow-auto text-sm">
           {list.map((s) => (
-            <li key={s}><button type="button" className="w-full text-left px-3 py-2 hover:bg-purple-50" onMouseDown={(e) => e.preventDefault()} onClick={() => { onChange(s); setOpen(false); }}>{s}</button></li>
+            <li key={s.display}>
+              <button type="button" className="w-full text-left px-3 py-2 hover:bg-purple-50" onMouseDown={(e) => e.preventDefault()} onClick={() => { onChange(s.display || s.label); setOpen(false); }}>
+                <span className="block">{s.label}</span>
+                {s.display !== s.label && <span className="block text-xs text-gray-500">{s.display}</span>}
+              </button>
+            </li>
           ))}
         </ul>
       )}
@@ -94,11 +64,42 @@ export default function AdminShipments() {
   const [photo, setPhoto] = useState('');
   const [busy, setBusy] = useState(false);
   const [shipments, setShipments] = useState<any[]>([]);
+  const [route, setRoute] = useState<{ stops: Place[]; miles?: number; minutes?: number } | null>(null);
+  const [pin, setPin] = useState('');
+  const [routing, setRouting] = useState(false);
+
+  useEffect(() => {
+    if (origin.length < 8 || destination.length < 8) { setRoute(null); return; }
+    const t = setTimeout(async () => {
+      setRouting(true);
+      try {
+        const data = await fetchRoute(origin, destination);
+        setRoute(data);
+        if (data.stops?.length && !pin) setPin(data.stops[Math.floor(data.stops.length / 2)]?.display || data.stops[0]?.label);
+      } catch { setRoute(null); }
+      finally { setRouting(false); }
+    }, 500);
+    return () => clearTimeout(t);
+  }, [origin, destination]);
 
   const story = useMemo(() => {
     if (!origin || !destination) return [];
-    return buildStory(origin, destination, scene.rank);
-  }, [origin, destination, scene]);
+    const stops = (route?.stops || []).map((s) => s.display || s.label);
+    const mid = pin || stops[Math.floor(stops.length / 2)] || origin;
+    const out: { status: string; location: string; details: string; hoursAgo: number }[] = [
+      { status: 'Label created', location: origin, details: 'Shipping label created', hoursAgo: 40 },
+    ];
+    if (scene.rank >= 1) out.push({ status: 'Picked up', location: origin, details: 'We have your package', hoursAgo: 32 });
+    if (scene.rank >= 2) {
+      stops.slice(1, -1).forEach((stop, i) => {
+        out.push({ status: 'In transit', location: stop, details: 'On the computed driving route', hoursAgo: 20 - i * 5 });
+      });
+      out.push({ status: scene.id === 'hold' ? 'Held at location' : 'In transit', location: mid, details: scene.id === 'hold' ? 'Stopped along the route' : 'On the way', hoursAgo: 5 });
+    }
+    if (scene.rank >= 3 && scene.id !== 'hold') out.push({ status: 'Out for delivery', location: destination, details: 'On a local truck', hoursAgo: 2 });
+    if (scene.rank >= 4 && scene.id !== 'hold') out.push({ status: 'Delivered', location: destination, details: 'Delivered', hoursAgo: 0.4 });
+    return out;
+  }, [origin, destination, scene, route, pin]);
 
   const refresh = async () => {
     try { setShipments(await apiListShipments()); } catch (e: any) { toast.error(e.message); }
@@ -109,16 +110,15 @@ export default function AdminShipments() {
     if (!origin || !destination) { toast.error('Choose from and to'); return; }
     setBusy(true);
     try {
-      const status = story[story.length - 1]?.status || 'Label created';
-      const location = story[story.length - 1]?.location || origin;
+      const last = story[story.length - 1];
       await apiSaveShipment({
         number,
-        status,
+        status: last?.status || 'Label created',
         origin,
         destination,
         service,
         estimatedDelivery: eta(service),
-        location,
+        location: last?.location || origin,
       });
       for (const ev of story) {
         try { await apiAddEvent({ number, status: ev.status, location: ev.location, details: ev.details }); } catch { /* ok */ }
@@ -141,7 +141,7 @@ export default function AdminShipments() {
         <div>
           <p className="text-xs uppercase tracking-widest text-[#4D148C]">Stage a package</p>
           <h1 className="text-2xl font-semibold">Create a tracking story</h1>
-          <p className="text-sm text-gray-500">Pick two cities and how far along it is. Hubs and times write themselves.</p>
+          <p className="text-sm text-gray-500">Type a real street or city. We geocode it and plot the driving route so you can stop it anywhere along the way.</p>
         </div>
         <div className="text-right">
           <p className="text-xs text-gray-500">TRACKING ID</p>
@@ -154,22 +154,17 @@ export default function AdminShipments() {
       </div>
 
       <div className="grid md:grid-cols-2 gap-3">
-        <PlaceInput value={origin} onChange={setOrigin} placeholder="From — start typing a city" />
-        <PlaceInput value={destination} onChange={setDestination} placeholder="To — start typing a city" />
+        <PlaceInput value={origin} onChange={setOrigin} placeholder="From — street or city" />
+        <PlaceInput value={destination} onChange={setDestination} placeholder="To — street or city" />
       </div>
 
       <select className="border rounded h-10 px-3" value={service} onChange={(e) => setService(e.target.value)}>
         {FEDEX_SERVICES.map((s) => <option key={s}>{s}</option>)}
       </select>
 
-      <div className="grid sm:grid-cols-5 gap-2">
+      <div className="grid sm:grid-cols-3 lg:grid-cols-6 gap-2">
         {SCENES.map((s) => (
-          <button
-            key={s.id}
-            type="button"
-            onClick={() => setScene(s)}
-            className={`rounded-xl border p-3 text-left ${scene.id === s.id ? 'border-[#4D148C] bg-purple-50' : 'bg-white hover:border-gray-300'}`}
-          >
+          <button key={s.id} type="button" onClick={() => setScene(s)} className={`rounded-xl border p-3 text-left ${scene.id === s.id ? 'border-[#4D148C] bg-purple-50' : 'bg-white'}`}>
             <p className="font-semibold text-sm">{s.label}</p>
             <p className="text-xs text-gray-500 mt-1">{s.hint}</p>
           </button>
@@ -177,11 +172,24 @@ export default function AdminShipments() {
       </div>
 
       <div className="bg-white border rounded-xl p-5">
-        <div className="flex items-center gap-2 mb-4 text-sm font-medium">
-          <Sparkles className="h-4 w-4 text-[#4D148C]" />
-          Preview of what the customer will see
+        <p className="text-sm font-medium mb-2">Stops on this route {routing ? '(calculating…)' : route?.miles ? `· ${route.miles} miles` : ''}</p>
+        <div className="flex flex-wrap gap-2">
+          {(route?.stops || []).map((s) => {
+            const label = s.display || s.label;
+            const active = pin === label;
+            return (
+              <button key={label} type="button" onClick={() => { setPin(label); setScene(SCENES.find((x) => x.id === 'hold') || SCENES[2]); }} className={`text-left text-xs border rounded-lg px-3 py-2 max-w-xs ${active ? 'border-[#4D148C] bg-purple-50' : 'bg-gray-50'}`}>
+                {label}
+              </button>
+            );
+          })}
+          {!route?.stops?.length && <p className="text-sm text-gray-400">Pick two full addresses to draw the road.</p>}
         </div>
-        {!story.length && <p className="text-sm text-gray-400">Choose from and to to preview the journey.</p>}
+        <p className="text-xs text-gray-500 mt-2">Tap a stop to park the package there without looking it up on a map.</p>
+      </div>
+
+      <div className="bg-white border rounded-xl p-5">
+        <div className="flex items-center gap-2 mb-4 text-sm font-medium"><Sparkles className="h-4 w-4 text-[#4D148C]" /> Customer tracking preview</div>
         <ol className="space-y-3">
           {story.map((ev, i) => (
             <li key={i} className="flex gap-3 text-sm">
@@ -194,25 +202,11 @@ export default function AdminShipments() {
             </li>
           ))}
         </ol>
-        {origin && destination && (
-          <p className="text-xs text-gray-500 mt-4">Scheduled delivery: {eta(service)}</p>
-        )}
       </div>
 
       <div className="flex flex-wrap items-center gap-4">
-        <label className="text-sm text-gray-600">
-          Optional photo
-          <input className="block mt-1" type="file" accept="image/*" onChange={(e) => {
-            const f = e.target.files?.[0]; if (!f) return;
-            const r = new FileReader();
-            r.onload = () => setPhoto(String(r.result));
-            r.readAsDataURL(f);
-          }} />
-        </label>
-        <Button disabled={busy} className="bg-[#4D148C] text-white ml-auto" onClick={publish}>
-          <Truck className="h-4 w-4 mr-2" />
-          {busy ? 'Publishing…' : 'Make it live'}
-        </Button>
+        <input type="file" accept="image/*" onChange={(e) => { const f = e.target.files?.[0]; if (!f) return; const r = new FileReader(); r.onload = () => setPhoto(String(r.result)); r.readAsDataURL(f); }} />
+        <Button disabled={busy} className="bg-[#4D148C] text-white ml-auto" onClick={publish}><Truck className="h-4 w-4 mr-2" />{busy ? 'Publishing…' : 'Make it live'}</Button>
       </div>
 
       <div className="bg-white border rounded-xl p-5">
@@ -222,12 +216,12 @@ export default function AdminShipments() {
             <li key={s.number} className="py-3 flex justify-between gap-3">
               <div>
                 <p className="font-mono">{s.number}</p>
-                <p className="text-gray-500">{s.status} · {s.origin} → {s.destination}</p>
+                <p className="text-gray-500">{s.status}</p>
+                <p className="text-xs text-gray-500">{s.origin} → {s.destination}</p>
               </div>
               <Button variant="outline" onClick={async () => { if (!confirm('Delete?')) return; await apiDeleteShipment(s.number); refresh(); }}>Remove</Button>
             </li>
           ))}
-          {!shipments.length && <li className="py-4 text-gray-400">Nothing live yet.</li>}
         </ul>
       </div>
     </div>
