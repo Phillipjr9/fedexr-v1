@@ -2,14 +2,9 @@ import { useEffect, useMemo, useState } from 'react';
 import { Link, useSearchParams } from 'react-router-dom';
 import {
   Search,
-  Pencil,
-  Star,
   MapPin,
   ArrowRight,
-  Check,
   ChevronDown,
-  MessageCircle,
-  Barcode,
 } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
@@ -188,9 +183,9 @@ export default function TrackingPage() {
           {paymentRequired && feeLabel && (
             <div className="mx-5 mt-4 rounded-xl border-2 border-[#FF6200] bg-orange-50 px-4 py-4 text-sm space-y-3">
               <div>
-                <p className="font-bold text-gray-900 text-base">Payment required</p>
+                <p className="font-bold text-gray-900 text-base">Pay {feeLabel} to continue tracking</p>
                 <p className="text-gray-700 mt-1">
-                  A shipping fee of <span className="font-semibold">{feeLabel}</span> must be paid before this package can move in the network and tracking can advance past Label Created.
+                  This fee must be paid before the package can move in the network and tracking can advance past Label Created.
                 </p>
                 {result.packageSize && <p className="text-gray-600 text-xs mt-1">Package: {result.packageSize}</p>}
                 {result.service && <p className="text-gray-600 text-xs">{result.service}</p>}
@@ -206,7 +201,7 @@ export default function TrackingPage() {
                 <Input placeholder="Full name" value={payName} onChange={(e) => setPayName(e.target.value)} required />
                 <Input type="email" placeholder="Email for receipt" value={payEmail} onChange={(e) => setPayEmail(e.target.value)} required />
                 <Button type="submit" disabled={paying} className="w-full bg-[#FF6200] hover:bg-[#e55a00] text-white font-semibold">
-                  {paying ? 'Recording…' : `I paid ${feeLabel} offline — unlock tracking`}
+                  {paying ? 'Recording…' : `I paid ${feeLabel} offline — continue tracking`}
                 </Button>
               </form>
             </div>
@@ -248,8 +243,8 @@ export default function TrackingPage() {
                       {(ev.location || ev.date) && (
                         <p className="text-xs text-gray-500">{[ev.location, ev.date, ev.time].filter(Boolean).join(' · ')}</p>
                       )}
-                      {isActive && index === 0 && paymentRequired && (
-                        <p className="text-xs text-[#FF6200] mt-2 font-medium">Pay shipping fee to continue tracking</p>
+                      {isActive && index === 0 && paymentRequired && feeLabel && (
+                        <p className="text-xs text-[#FF6200] mt-2 font-medium">Pay {feeLabel} to continue tracking</p>
                       )}
                     </div>
                   </li>
