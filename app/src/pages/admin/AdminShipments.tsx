@@ -3,19 +3,9 @@ import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { toast } from 'sonner';
 import { FEDEX_SERVICES, generateTrackingNumber, geocodePlaces, fetchRoute, type Place } from '@/lib/places';
+import { HOLD_REASONS } from '@/lib/holdReasons';
 import { apiAddEvent, apiDeleteShipment, apiListShipments, apiSaveShipment, apiUploadImage } from '@/lib/adminApi';
 import { Copy, RefreshCw, Sparkles, Truck } from 'lucide-react';
-
-const HOLD_REASONS = [
-  'Customs inspection required',
-  'Incorrect or incomplete address',
-  'Recipient not available',
-  'Payment or duties pending',
-  'Weather or operational delay',
-  'Package damaged — inspection needed',
-  'Held at location by request',
-  'Other',
-];
 
 const SCENES = [
   { id: 'label', label: 'Just created', rank: 0 },
@@ -190,7 +180,7 @@ export default function AdminShipments() {
             {HOLD_REASONS.map((r) => <option key={r}>{r}</option>)}
           </select>
           {holdReason === 'Other' && <Input value={holdOther} onChange={(e) => setHoldOther(e.target.value)} placeholder="Type the full reason" />}
-          <p className="text-xs text-gray-600">This reason shows on tracking and on the Holds page.</p>
+          <p className="text-xs text-gray-600">This full reason shows on tracking and on the Holds page.</p>
         </div>
       )}
       <div className="bg-white border rounded-xl p-5">
