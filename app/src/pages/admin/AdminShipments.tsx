@@ -5,8 +5,8 @@ import { toast } from 'sonner';
 import { FEDEX_SERVICES, generateTrackingNumber, geocodePlaces, fetchRoute, type Place } from '@/lib/places';
 import { HOLD_REASONS } from '@/lib/holdReasons';
 import { PACKAGE_SIZES, formatFee, quoteFee } from '@/lib/shippingRates';
-import { apiAddEvent, apiDeleteShipment, apiListShipments, apiSaveShipment, apiUploadImage } from '@/lib/adminApi';
-import { Copy, RefreshCw, Sparkles, Truck } from 'lucide-react';
+import { apiAddEvent, apiDeleteShipment, apiListShipments, apiSaveShipment, apiUploadImage, type ImageEventType } from '@/lib/adminApi';
+import { Camera, Pencil, Truck, X } from 'lucide-react';
 
 const SCENES = [
   { id: 'label', label: 'Just created', rank: 0 },
@@ -17,12 +17,20 @@ const SCENES = [
   { id: 'hold', label: 'Stop here', rank: 2 },
 ];
 
-function hoursAgo(h: number) { return new Date(Date.now() - h * 3600_000); }
 function eta(service: string) {
   if (/same|first/i.test(service)) return 'Today · By end of day';
   const days = /overnight/i.test(service) ? 1 : /2day/i.test(service) ? 2 : /saver/i.test(service) ? 3 : 5;
   const d = new Date(); d.setDate(d.getDate() + days);
   return d.toLocaleDateString('en-US', { weekday: 'short', month: 'short', day: 'numeric' });
+}
+
+function fileToDataUrl(file: File): Promise<string> {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onload = () => resolve(String(reader.result || ''));
+    reader.onerror = () => reject(new Error('Could not read image'));
+    reader.readAsDataURL(file);
+  });
 }
 
 function PlaceInput({ value, onChange, placeholder }: { value: string; onChange: (v: string) => void; placeholder: string }) {
@@ -57,6 +65,7 @@ export default function AdminShipments() {
   const [scene, setScene] = useState(SCENES[2]);
   const [number, setNumber] = useState(generateTrackingNumber());
   const [photo, setPhoto] = useState('');
+  const [photoKind, setPhotoKind] = useState<ImageEventType>('setup');
   const [busy, setBusy] = useState(false);
   const [shipments, setShipments] = useState<any[]>([]);
   const [route, setRoute] = useState<{ stops: Place[]; miles?: number } | null>(null);
@@ -64,6 +73,10 @@ export default function AdminShipments() {
   const [routing, setRouting] = useState(false);
   const [holdReason, setHoldReason] = useState(HOLD_REASONS[0]);
   const [holdOther, setHoldOther] = useState('');
+  const [editing, setEditing] = useState(false);
+  const [editStatus, setEditStatus] = useState('In transit');
+  const [editLocation, setEditLocation] = useState('');
+  const [editDetails, setEditDetails] = useState('');
 
   const reasonText = holdReason === 'Other' ? holdOther.trim() : holdReason;
   const quoted = quoteFee(sizeId, service);
@@ -108,6 +121,48 @@ export default function AdminShipments() {
   const refresh = async () => { try { setShipments(await apiListShipments()); } catch (e: any) { toast.error(e.message); } };
   useEffect(() => { refresh(); }, []);
 
+  const resetForm = () => {
+    setNumber(generateTrackingNumber());
+    setOrigin('');
+    setDestination('');
+    setPhoto('');
+    setPhotoKind('setup');
+    setEditing(false);
+    setEditStatus('In transit');
+    setEditLocation('');
+    setEditDetails('');
+    setScene(SCENES[2]);
+    setManualFee('');
+  };
+
+  const loadForEdit = (s: any) => {
+    setEditing(true);
+    setNumber(s.number);
+    setOrigin(s.origin || '');
+    setDestination(s.destination || '');
+    setService(s.service || 'FedEx Ground');
+    setEditStatus(s.status || 'In transit');
+    setEditLocation(s.location || s.origin || '');
+    setEditDetails('');
+    setManualFee(s.shippingFee != null ? String(s.shippingFee) : '');
+    setPhoto('');
+    const st = String(s.status || '').toLowerCase();
+    if (st.includes('deliver')) setPhotoKind('delivered');
+    else if (st.includes('transit') || st.includes('way') || st.includes('out for')) setPhotoKind('transit');
+    else setPhotoKind('setup');
+    window.scrollTo({ top: 0, behavior: 'smooth' });
+  };
+
+  const onPickPhoto = async (file?: File | null) => {
+    if (!file) return;
+    try {
+      const dataUrl = await fileToDataUrl(file);
+      setPhoto(dataUrl);
+    } catch {
+      toast.error('Could not read that image');
+    }
+  };
+
   const publish = async () => {
     if (!origin || !destination) { toast.error('Choose from and to'); return; }
     if (scene.id === 'hold' && !reasonText) { toast.error('Choose why it was stopped'); return; }
@@ -119,7 +174,7 @@ export default function AdminShipments() {
       await apiSaveShipment({
         number, status: last?.status || 'Label created', origin, destination, service,
         estimatedDelivery: eta(service), location: last?.location || origin,
-        shippingFee: String(fee), packageSize: sizeLabel,
+        shippingFee: String(fee), packageSize: sizeLabel, skipEvent: true,
       });
       for (const ev of story) {
         try { await apiAddEvent({ number, status: ev.status, location: ev.location, details: ev.details }); } catch { /* ok */ }
@@ -131,35 +186,98 @@ export default function AdminShipments() {
           body: JSON.stringify({ number, location: last?.location || pin, reason: reasonText, email: 'admin@internal' }),
         });
       }
-      if (photo) await apiUploadImage(number, photo, scene.rank >= 4 ? 'delivered' : 'setup');
+      if (photo) {
+        const kind: ImageEventType = scene.rank >= 4 ? 'delivered' : scene.rank >= 2 ? 'transit' : 'setup';
+        await apiUploadImage(number, photo, kind);
+      }
       toast.success(`${number} is live · ${formatFee(fee)}`);
-      setNumber(generateTrackingNumber());
-      setPhoto('');
+      resetForm();
       await refresh();
     } catch (e: any) {
       toast.error(e.message || 'Publish failed');
     } finally { setBusy(false); }
   };
 
+  const saveEdit = async () => {
+    if (!number.trim()) { toast.error('Tracking number required'); return; }
+    setBusy(true);
+    try {
+      const sizeLabel = PACKAGE_SIZES.find((s) => s.id === sizeId)?.label || sizeId;
+      await apiSaveShipment({
+        number,
+        status: editStatus || 'In transit',
+        origin,
+        destination,
+        service,
+        estimatedDelivery: eta(service),
+        location: editLocation || origin,
+        shippingFee: String(Number.isFinite(fee) ? fee : 0),
+        packageSize: sizeLabel,
+        skipEvent: true,
+      });
+      if (editStatus && editLocation) {
+        await apiAddEvent({
+          number,
+          status: editStatus,
+          location: editLocation,
+          details: editDetails || undefined,
+        });
+      }
+      if (photo) {
+        await apiUploadImage(number, photo, photoKind);
+      }
+      toast.success(`Updated ${number}`);
+      resetForm();
+      await refresh();
+    } catch (e: any) {
+      toast.error(e.message || 'Update failed');
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const uploadOnly = async (s: any, kind: ImageEventType, file: File) => {
+    try {
+      const dataUrl = await fileToDataUrl(file);
+      await apiUploadImage(s.number, dataUrl, kind);
+      toast.success(`Photo saved for ${s.number} (${kind})`);
+      refresh();
+    } catch (e: any) {
+      toast.error(e.message || 'Upload failed');
+    }
+  };
+
   return (
     <div className="max-w-5xl space-y-6">
       <div className="flex items-start justify-between gap-4">
         <div>
-          <h1 className="text-2xl font-semibold">Create a tracking story</h1>
-          <p className="text-sm text-gray-500">Size sets the rate. Override the fee if you need to.</p>
+          <h1 className="text-2xl font-semibold">{editing ? 'Edit shipment' : 'Create a tracking story'}</h1>
+          <p className="text-sm text-gray-500">
+            {editing
+              ? 'Change status, location, fee, or add a package photo anytime — including while it is on the way.'
+              : 'Size sets the rate. Override the fee if you need to.'}
+          </p>
         </div>
         <div className="text-right">
           <p className="font-mono text-lg">{number}</p>
           <p className="text-sm text-[#4D148C] font-semibold">{formatFee(Number.isFinite(fee) ? fee : 0)}</p>
+          {editing && (
+            <Button type="button" variant="outline" className="mt-2" onClick={resetForm}>
+              <X className="h-4 w-4 mr-1" /> Cancel edit
+            </Button>
+          )}
         </div>
       </div>
+
       <div className="grid md:grid-cols-2 gap-3">
         <PlaceInput value={origin} onChange={setOrigin} placeholder="From — street or city" />
         <PlaceInput value={destination} onChange={setDestination} placeholder="To — street or city" />
       </div>
+
       <select className="border rounded h-10 px-3" value={service} onChange={(e) => setService(e.target.value)}>
         {FEDEX_SERVICES.map((s) => <option key={s}>{s}</option>)}
       </select>
+
       <div className="grid sm:grid-cols-3 gap-2">
         {PACKAGE_SIZES.map((s) => (
           <button key={s.id} type="button" onClick={() => setSizeId(s.id)} className={`rounded-xl border p-3 text-left ${sizeId === s.id ? 'border-[#4D148C] bg-purple-50' : 'bg-white'}`}>
@@ -168,6 +286,7 @@ export default function AdminShipments() {
           </button>
         ))}
       </div>
+
       <div className="bg-white border rounded-xl p-4 flex flex-wrap items-end gap-4">
         <div>
           <p className="text-xs text-gray-500">Quoted for this size + service</p>
@@ -178,58 +297,157 @@ export default function AdminShipments() {
           <Input type="number" min="0" step="0.01" value={manualFee} onChange={(e) => setManualFee(e.target.value)} placeholder={String(quoted)} />
         </div>
       </div>
-      <div className="grid sm:grid-cols-3 lg:grid-cols-6 gap-2">
-        {SCENES.map((s) => (
-          <button key={s.id} type="button" onClick={() => setScene(s)} className={`rounded-xl border p-3 text-left text-sm font-semibold ${scene.id === s.id ? 'border-[#4D148C] bg-purple-50' : 'bg-white'}`}>{s.label}</button>
-        ))}
-      </div>
-      <div className="bg-white border rounded-xl p-5">
-        <p className="text-sm font-medium mb-2">Route stops {routing ? '(calculating…)' : route?.miles ? `· ${route.miles} mi` : ''}</p>
-        <div className="flex flex-wrap gap-2">
-          {(route?.stops || []).map((s) => {
-            const label = s.display || s.label;
-            return (
-              <button key={label} type="button" onClick={() => { setPin(label); setScene(SCENES.find((x) => x.id === 'hold')!); }} className={`text-left text-xs border rounded-lg px-3 py-2 max-w-xs ${pin === label ? 'border-[#4D148C] bg-purple-50' : 'bg-gray-50'}`}>{label}</button>
-            );
-          })}
+
+      {editing ? (
+        <div className="bg-white border rounded-xl p-5 space-y-3">
+          <p className="font-medium text-sm">Update status / scan</p>
+          <div className="grid sm:grid-cols-2 gap-3">
+            <div>
+              <label className="text-xs text-gray-500">Status</label>
+              <select className="w-full border rounded h-10 px-2" value={editStatus} onChange={(e) => setEditStatus(e.target.value)}>
+                {['Label created', 'Picked up', 'In transit', 'At facility', 'Out for delivery', 'Delivered', 'Held at location', 'Exception'].map((s) => (
+                  <option key={s}>{s}</option>
+                ))}
+              </select>
+            </div>
+            <div>
+              <label className="text-xs text-gray-500">Current location</label>
+              <Input value={editLocation} onChange={(e) => setEditLocation(e.target.value)} placeholder="City, State" />
+            </div>
+          </div>
+          <div>
+            <label className="text-xs text-gray-500">Details (optional)</label>
+            <Input value={editDetails} onChange={(e) => setEditDetails(e.target.value)} placeholder="On the way / We have your package" />
+          </div>
         </div>
-      </div>
-      {scene.id === 'hold' && (
-        <div className="bg-amber-50 border border-amber-200 rounded-xl p-5 space-y-3">
-          <p className="font-medium text-sm">Why was this stopped?</p>
-          <select className="w-full border rounded h-10 px-2 bg-white" value={holdReason} onChange={(e) => setHoldReason(e.target.value)}>
-            {HOLD_REASONS.map((r) => <option key={r}>{r}</option>)}
-          </select>
-          {holdReason === 'Other' && <Input value={holdOther} onChange={(e) => setHoldOther(e.target.value)} placeholder="Type the full reason" />}
-        </div>
+      ) : (
+        <>
+          <div className="grid sm:grid-cols-3 lg:grid-cols-6 gap-2">
+            {SCENES.map((s) => (
+              <button key={s.id} type="button" onClick={() => setScene(s)} className={`rounded-xl border p-3 text-left text-sm font-semibold ${scene.id === s.id ? 'border-[#4D148C] bg-purple-50' : 'bg-white'}`}>{s.label}</button>
+            ))}
+          </div>
+          <div className="bg-white border rounded-xl p-5">
+            <p className="text-sm font-medium mb-2">Route stops {routing ? '(calculating…)' : route?.miles ? `· ${route.miles} mi` : ''}</p>
+            <div className="flex flex-wrap gap-2">
+              {(route?.stops || []).map((s) => {
+                const label = s.display || s.label;
+                return (
+                  <button key={label} type="button" onClick={() => { setPin(label); setScene(SCENES.find((x) => x.id === 'hold')!); }} className={`text-left text-xs border rounded-lg px-3 py-2 max-w-xs ${pin === label ? 'border-[#4D148C] bg-purple-50' : 'bg-gray-50'}`}>{label}</button>
+                );
+              })}
+            </div>
+          </div>
+          {scene.id === 'hold' && (
+            <div className="bg-amber-50 border border-amber-200 rounded-xl p-5 space-y-3">
+              <p className="font-medium text-sm">Why was this stopped?</p>
+              <select className="w-full border rounded h-10 px-2 bg-white" value={holdReason} onChange={(e) => setHoldReason(e.target.value)}>
+                {HOLD_REASONS.map((r) => <option key={r}>{r}</option>)}
+              </select>
+              {holdReason === 'Other' && <Input value={holdOther} onChange={(e) => setHoldOther(e.target.value)} placeholder="Type the full reason" />}
+            </div>
+          )}
+          <div className="bg-white border rounded-xl p-5">
+            <div className="flex items-center gap-2 mb-4 text-sm font-medium">Preview</div>
+            <ol className="space-y-3">
+              {story.map((ev, i) => (
+                <li key={i} className="flex gap-3 text-sm">
+                  <span className={`mt-1 h-2.5 w-2.5 rounded-full ${i === story.length - 1 ? 'bg-[#4D148C]' : 'bg-gray-300'}`} />
+                  <div>
+                    <p className="font-semibold">{ev.status}</p>
+                    <p className="text-gray-600">{ev.location}</p>
+                  </div>
+                </li>
+              ))}
+            </ol>
+          </div>
+        </>
       )}
-      <div className="bg-white border rounded-xl p-5">
-        <div className="flex items-center gap-2 mb-4 text-sm font-medium"><Sparkles className="h-4 w-4 text-[#4D148C]" /> Preview</div>
-        <ol className="space-y-3">
-          {story.map((ev, i) => (
-            <li key={i} className="flex gap-3 text-sm">
-              <span className={`mt-1 h-2.5 w-2.5 rounded-full ${i === story.length - 1 ? 'bg-[#4D148C]' : 'bg-gray-300'}`} />
-              <div>
-                <p className="font-semibold">{ev.status}</p>
-                <p className="text-gray-600">{ev.location}</p>
-              </div>
-            </li>
+
+      <div className="bg-white border rounded-xl p-5 space-y-3">
+        <p className="font-medium text-sm flex items-center gap-2"><Camera className="h-4 w-4" /> Package photo</p>
+        <p className="text-xs text-gray-500">Upload anytime — label, on the way, or delivered. Shown on public tracking.</p>
+        <div className="flex flex-wrap gap-2">
+          {(['setup', 'transit', 'delivered'] as ImageEventType[]).map((k) => (
+            <button
+              key={k}
+              type="button"
+              onClick={() => setPhotoKind(k)}
+              className={`px-3 py-1.5 rounded-full text-xs font-semibold border ${photoKind === k ? 'bg-[#4D148C] text-white border-[#4D148C]' : 'bg-white text-gray-700'}`}
+            >
+              {k === 'setup' ? 'Label / pickup' : k === 'transit' ? 'On the way' : 'Delivered'}
+            </button>
           ))}
-        </ol>
+        </div>
+        <Input type="file" accept="image/*" onChange={(e) => onPickPhoto(e.target.files?.[0])} />
+        {photo && <img src={photo} alt="Preview" className="max-h-40 rounded-lg border" />}
       </div>
-      <Button disabled={busy} className="bg-[#4D148C] text-white" onClick={publish}><Truck className="h-4 w-4 mr-2" />{busy ? 'Publishing…' : `Make it live · ${formatFee(Number.isFinite(fee) ? fee : 0)}`}</Button>
+
+      <Button
+        disabled={busy}
+        className="bg-[#4D148C] text-white"
+        onClick={editing ? saveEdit : publish}
+      >
+        <Truck className="h-4 w-4 mr-2" />
+        {busy ? 'Saving…' : editing ? `Save changes · ${formatFee(Number.isFinite(fee) ? fee : 0)}` : `Make it live · ${formatFee(Number.isFinite(fee) ? fee : 0)}`}
+      </Button>
+
       <div className="bg-white border rounded-xl p-5">
         <h2 className="font-semibold mb-3">Live now</h2>
         <ul className="divide-y text-sm">
           {shipments.map((s) => (
-            <li key={s.number} className="py-3 flex justify-between gap-3">
-              <div>
-                <p className="font-mono">{s.number}</p>
-                <p className="text-gray-500">{s.status}{s.shippingFee != null ? ` · ${formatFee(s.shippingFee)}` : ''}</p>
+            <li key={s.number} className="py-4 space-y-3">
+              <div className="flex flex-wrap justify-between gap-3">
+                <div>
+                  <p className="font-mono">{s.number}</p>
+                  <p className="text-gray-500">{s.status}{s.shippingFee != null ? ` · ${formatFee(s.shippingFee)}` : ''}</p>
+                  <p className="text-xs text-gray-400">{s.origin} → {s.destination}</p>
+                </div>
+                <div className="flex flex-wrap gap-2">
+                  <Button type="button" variant="outline" className="text-gray-900 border-gray-300" onClick={() => loadForEdit(s)}>
+                    <Pencil className="h-4 w-4 mr-1" /> Edit
+                  </Button>
+                  <Button
+                    type="button"
+                    variant="outline"
+                    className="text-red-700 border-red-200"
+                    onClick={async () => {
+                      if (!confirm('Delete this shipment?')) return;
+                      await apiDeleteShipment(s.number);
+                      refresh();
+                    }}
+                  >
+                    Remove
+                  </Button>
+                </div>
               </div>
-              <Button variant="outline" onClick={async () => { if (!confirm('Delete?')) return; await apiDeleteShipment(s.number); refresh(); }}>Remove</Button>
+              <div className="flex flex-wrap gap-2 items-center">
+                <span className="text-xs text-gray-500">Add photo:</span>
+                {(['setup', 'transit', 'delivered'] as ImageEventType[]).map((k) => (
+                  <label key={k} className="inline-flex items-center gap-1 text-xs border rounded-lg px-2 py-1.5 cursor-pointer hover:bg-purple-50">
+                    <Camera className="h-3.5 w-3.5" />
+                    {k === 'setup' ? 'Label' : k === 'transit' ? 'On the way' : 'Delivered'}
+                    <input
+                      type="file"
+                      accept="image/*"
+                      className="sr-only"
+                      onChange={(e) => {
+                        const f = e.target.files?.[0];
+                        if (f) uploadOnly(s, k, f);
+                        e.target.value = '';
+                      }}
+                    />
+                  </label>
+                ))}
+                <span className="text-xs text-gray-400">
+                  {s.hasSetupImage ? '· has label photo' : ''}
+                  {s.hasTransitImage ? ' · has on-the-way photo' : ''}
+                  {s.hasDeliveredImage ? ' · has delivery photo' : ''}
+                </span>
+              </div>
             </li>
           ))}
+          {!shipments.length && <li className="py-6 text-gray-500">No live shipments yet.</li>}
         </ul>
       </div>
     </div>
