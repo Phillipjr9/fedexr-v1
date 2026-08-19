@@ -1,5 +1,5 @@
 import { NavLink, Outlet, useNavigate } from 'react-router-dom';
-import { useEffect } from 'react';
+import { useEffect, useState } from 'react';
 import {
   LayoutDashboard,
   Package,
@@ -28,19 +28,26 @@ const links = [
 
 export default function AdminLayout() {
   const navigate = useNavigate();
+  const [user, setUser] = useState('');
 
   useEffect(() => {
-    if (!isAdminLoggedIn()) navigate('/admin', { replace: true });
+    if (!isAdminLoggedIn()) {
+      navigate('/admin', { replace: true });
+      return;
+    }
+    setUser(localStorage.getItem('adminUsername') || 'staff');
   }, [navigate]);
 
   const handleLogout = () => {
     logoutAdmin();
+    localStorage.removeItem('adminPassword');
+    localStorage.removeItem('adminUsername');
     navigate('/admin');
   };
 
   return (
     <div className="min-h-screen bg-[#f4f4f4] flex">
-      <aside className="w-64 bg-[#4D148C] text-white flex flex-col">
+      <aside className="w-64 bg-[#4D148C] text-white flex flex-col shrink-0">
         <div className="px-6 py-5 border-b border-white/10">
           <p className="text-xs uppercase tracking-widest text-white/60">Back office</p>
           <p className="text-lg font-semibold">
@@ -54,26 +61,28 @@ export default function AdminLayout() {
               to={link.to}
               className={({ isActive }) =>
                 `flex items-center gap-3 px-6 py-3 text-sm ${
-                  isActive ? 'bg-white/15 font-semibold' : 'text-white/80 hover:bg-white/10'
+                  isActive ? 'bg-white/15 font-semibold text-white' : 'text-white/90 hover:bg-white/10'
                 }`
               }
             >
-              <link.icon className="h-4 w-4" />
-              {link.label}
+              <link.icon className="h-4 w-4 shrink-0" />
+              <span>{link.label}</span>
             </NavLink>
           ))}
         </nav>
         <button
+          type="button"
           onClick={handleLogout}
-          className="flex items-center gap-3 px-6 py-4 text-sm text-white/80 hover:bg-white/10 border-t border-white/10"
+          className="flex items-center gap-3 px-6 py-4 text-sm text-white/90 hover:bg-white/10 border-t border-white/10"
         >
           <LogOut className="h-4 w-4" />
           Sign out
         </button>
       </aside>
       <div className="flex-1 min-w-0">
-        <header className="bg-white border-b px-8 py-4">
+        <header className="bg-white border-b px-8 py-4 flex items-center justify-between gap-4">
           <p className="text-sm text-gray-500">Staff console — not on the public site</p>
+          <p className="text-sm text-gray-700 font-medium truncate">{user}</p>
         </header>
         <main className="p-8">
           <Outlet />
