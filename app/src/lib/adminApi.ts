@@ -80,17 +80,24 @@ export async function apiAddEvent(body: {
 
 export type ImageEventType = 'setup' | 'delivered' | 'transit';
 
+export const MIN_PACKAGE_PHOTOS = 5;
+
 export async function apiUploadImage(
   trackingNumber: string,
   dataUrl: string,
-  eventType: ImageEventType
+  eventType: ImageEventType = 'setup'
 ) {
   const res = await fetch('/api/upload-tracking-image', {
     method: 'POST',
     headers: adminHeaders(),
-    body: JSON.stringify({ trackingNumber, dataUrl, eventType }),
+    body: JSON.stringify({ trackingNumber, dataUrl, eventType, replace: false }),
   });
-  await handleResponse(res, 'Could not upload image');
+  return handleResponse(res, 'Could not upload image') as Promise<{
+    ok: boolean;
+    id?: number;
+    count?: number;
+    meetsMinimum?: boolean;
+  }>;
 }
 
 export async function apiGetImage(number: string, event: ImageEventType) {
@@ -98,6 +105,26 @@ export async function apiGetImage(number: string, event: ImageEventType) {
   if (!res.ok) return null;
   const json = await res.json();
   return json.found ? (json.dataUrl as string) : null;
+}
+
+export async function apiListImages(number: string) {
+  const res = await fetch(
+    `/api/get-tracking-image?number=${encodeURIComponent(number)}&list=1`
+  );
+  if (!res.ok) return { count: 0, images: [] as { id: number; eventType: string; dataUrl: string }[] };
+  const json = await res.json().catch(() => ({}));
+  return {
+    count: Number(json.count || 0),
+    images: (json.images || []) as { id: number; eventType: string; dataUrl: string }[],
+  };
+}
+
+export async function apiDeleteImage(id: number) {
+  const res = await fetch(`/api/upload-tracking-image?id=${id}`, {
+    method: 'DELETE',
+    headers: adminHeaders(),
+  });
+  await handleResponse(res, 'Could not delete image');
 }
 
 export async function apiGetBanner() {
