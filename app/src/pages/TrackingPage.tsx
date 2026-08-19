@@ -32,8 +32,24 @@ interface TrackResult {
   destination?: string;
   service?: string;
   location?: string;
+  shippingFee?: number | null;
+  packageSize?: string;
   history: TrackingEvent[];
 }
+
+const STATE_ABBR: Record<string, string> = {
+  ALABAMA: 'AL', ALASKA: 'AK', ARIZONA: 'AZ', ARKANSAS: 'AR', CALIFORNIA: 'CA',
+  COLORADO: 'CO', CONNECTICUT: 'CT', DELAWARE: 'DE', FLORIDA: 'FL', GEORGIA: 'GA',
+  HAWAII: 'HI', IDAHO: 'ID', ILLINOIS: 'IL', INDIANA: 'IN', IOWA: 'IA',
+  KANSAS: 'KS', KENTUCKY: 'KY', LOUISIANA: 'LA', MAINE: 'ME', MARYLAND: 'MD',
+  MASSACHUSETTS: 'MA', MICHIGAN: 'MI', MINNESOTA: 'MN', MISSISSIPPI: 'MS',
+  MISSOURI: 'MO', MONTANA: 'MT', NEBRASKA: 'NE', NEVADA: 'NV', 'NEW HAMPSHIRE': 'NH',
+  'NEW JERSEY': 'NJ', 'NEW MEXICO': 'NM', 'NEW YORK': 'NY', 'NORTH CAROLINA': 'NC',
+  'NORTH DAKOTA': 'ND', OHIO: 'OH', OKLAHOMA: 'OK', OREGON: 'OR', PENNSYLVANIA: 'PA',
+  'RHODE ISLAND': 'RI', 'SOUTH CAROLINA': 'SC', 'SOUTH DAKOTA': 'SD', TENNESSEE: 'TN',
+  TEXAS: 'TX', UTAH: 'UT', VERMONT: 'VT', VIRGINIA: 'VA', WASHINGTON: 'WA',
+  'WEST VIRGINIA': 'WV', WISCONSIN: 'WI', WYOMING: 'WY', 'DISTRICT OF COLUMBIA': 'DC',
+};
 
 function publicDetails(status: string, details?: string) {
   const raw = String(details || '').trim();
@@ -48,10 +64,21 @@ function publicDetails(status: string, details?: string) {
   return '';
 }
 
+function normalizeState(raw: string): string {
+  const t = raw.replace(/\b(united states|usa|u\.s\.|us)\b/gi, '').replace(/\d/g, '').trim();
+  if (!t) return '';
+  if (/^[A-Za-z]{2}$/.test(t)) return t.toUpperCase();
+  const key = t.toUpperCase();
+  return STATE_ABBR[key] || (t.length <= 2 ? t.toUpperCase() : '');
+}
+
 function cityState(raw?: string | null): { city: string; state: string } {
   if (!raw) return { city: '', state: '' };
   let s = String(raw).replace(/\s+/g, ' ').trim();
   if (!s) return { city: '', state: '' };
+
+  // Drop trailing country tokens so we never get "US US"
+  s = s.replace(/,\s*(united states|usa|u\.s\.|us)\s*$/i, '').trim();
 
   let parts = s.split(',').map((p) => p.trim()).filter(Boolean);
   if (parts.length >= 2) {
@@ -66,13 +93,34 @@ function cityState(raw?: string | null): { city: string; state: string } {
 
   if (parts.length >= 2) {
     const last = parts[parts.length - 1];
-    const stMatch = last.match(/\b([A-Za-z]{2})\b/);
-    const state = (stMatch ? stMatch[1] : last).toUpperCase().slice(0, 2);
-    const city = parts.slice(0, -1).join(' ');
+    // last may be "SC" or "South Carolina" or "SC US"
+    const state = normalizeState(last);
+    let city = parts.slice(0, -1).join(' ');
+    // "Clearwater South Carolina" with state empty — try extract state from city tail
+    if (!state) {
+      for (const [name, abbr] of Object.entries(STATE_ABBR)) {
+        const re = new RegExp(`\\b${name}$`, 'i');
+        if (re.test(city)) {
+          return { city: city.replace(re, '').trim(), state: abbr };
+        }
+      }
+    }
+    // city may still include full state name
+    for (const [name, abbr] of Object.entries(STATE_ABBR)) {
+      if (state === abbr) {
+        const re = new RegExp(`\\b${name}$`, 'i');
+        city = city.replace(re, '').trim();
+      }
+    }
     return { city, state };
   }
 
-  const m = s.match(/^(.+?)\s+([A-Za-z]{2})(?:\s|$)/);
+  // Single segment: try "City STATE" or "City State Name"
+  for (const [name, abbr] of Object.entries(STATE_ABBR)) {
+    const re = new RegExp(`\\b${name}$`, 'i');
+    if (re.test(s)) return { city: s.replace(re, '').trim(), state: abbr };
+  }
+  const m = s.match(/^(.+?)\s+([A-Za-z]{2})$/);
   if (m) return { city: m[1].replace(/\d/g, '').trim(), state: m[2].toUpperCase() };
   return { city: s, state: '' };
 }
@@ -85,7 +133,6 @@ function titleCaseCity(city: string) {
     .join(' ');
 }
 
-/** FROM / completed origin: "MOUNTVILLE, PA US" */
 function placeFrom(raw?: string | null) {
   const { city, state } = cityState(raw);
   if (!city && !state) return '';
@@ -93,7 +140,6 @@ function placeFrom(raw?: string | null) {
   return (city || state).toUpperCase();
 }
 
-/** Hub steps: "LOS ANGELES, CA" */
 function placeHub(raw?: string | null) {
   const { city, state } = cityState(raw);
   if (!city && !state) return '';
@@ -101,7 +147,6 @@ function placeHub(raw?: string | null) {
   return (city || state).toUpperCase();
 }
 
-/** TO while still in transit: "FLORISSANT, MO US" */
 function placeTo(raw?: string | null) {
   const { city, state } = cityState(raw);
   if (!city && !state) return '';
@@ -109,7 +154,6 @@ function placeTo(raw?: string | null) {
   return (city || state).toUpperCase();
 }
 
-/** Delivered card place: "Los Angeles, CA US" (title case city) */
 function placeDelivered(raw?: string | null) {
   const { city, state } = cityState(raw);
   if (!city && !state) return '';
@@ -117,7 +161,7 @@ function placeDelivered(raw?: string | null) {
   return titleCaseCity(city || state);
 }
 
-function milestoneIndex(status: string) {
+function rankOfStatus(status: string): number {
   const s = status.toLowerCase();
   if (s.includes('deliver') && !s.includes('out')) return 4;
   if (s.includes('out for')) return 3;
@@ -134,7 +178,27 @@ function milestoneIndex(status: string) {
     return 2;
   if (s.includes('pick') || s.includes('we have')) return 1;
   if (s.includes('label') || s.includes('created') || s.includes('shipped')) return 0;
-  return 2;
+  return -1;
+}
+
+/** Active step from real scan history — never jump ahead of what actually happened. */
+function milestoneIndex(status: string, history: TrackingEvent[]) {
+  let max = rankOfStatus(status);
+  for (const h of history || []) {
+    max = Math.max(max, rankOfStatus(h.status));
+  }
+  if (max < 0) max = 0;
+
+  // If history only has label/created events, stay on FROM
+  const hist = history || [];
+  if (hist.length > 0) {
+    const onlyLabel = hist.every((h) => {
+      const r = rankOfStatus(h.status);
+      return r <= 0;
+    });
+    if (onlyLabel) return 0;
+  }
+  return max;
 }
 
 function findEvent(history: TrackingEvent[], ...keys: string[]) {
@@ -148,6 +212,11 @@ function formatWhen(ev?: TrackingEvent, deliveredStyle = false) {
     return `${ev.date} ${ev.time}`;
   }
   return ev.date || ev.time || '';
+}
+
+function formatFee(n?: number | null) {
+  if (n == null || !Number.isFinite(n)) return '';
+  return new Intl.NumberFormat('en-US', { style: 'currency', currency: 'USD' }).format(n);
 }
 
 async function fetchImage(number: string, event: string) {
@@ -202,12 +271,14 @@ export default function TrackingPage() {
       if (trackRes.ok && (trackJson.found || trackJson.status)) {
         next = {
           number: trackJson.number || number,
-          status: trackJson.status || 'In transit',
+          status: trackJson.status || 'Label created',
           estimatedDelivery: trackJson.estimatedDelivery || '',
           origin: trackJson.origin || '',
           destination: trackJson.destination || '',
           service: trackJson.service || '',
           location: trackJson.location || '',
+          shippingFee: trackJson.shippingFee != null ? Number(trackJson.shippingFee) : null,
+          packageSize: trackJson.packageSize || '',
           history: trackJson.history || [],
         };
       } else {
@@ -223,6 +294,8 @@ export default function TrackingPage() {
             destination: shipment.destination || '',
             service: shipment.service || '',
             location: shipment.location || '',
+            shippingFee: shipment.shippingFee != null ? Number(shipment.shippingFee) : null,
+            packageSize: shipment.packageSize || '',
             history: shipment.history || [],
           };
         }
@@ -249,10 +322,13 @@ export default function TrackingPage() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [params]);
 
-  const active = useMemo(() => (result ? milestoneIndex(result.status) : 0), [result]);
+  const active = useMemo(
+    () => (result ? milestoneIndex(result.status, result.history || []) : 0),
+    [result]
+  );
   const delivered = !!result && /deliver/i.test(result.status) && !/out for/i.test(result.status);
-  /** FedEx green when delivered, purple while in network */
   const brand = delivered ? '#00843D' : '#4D148C';
+  const feeLabel = result ? formatFee(result.shippingFee) : '';
 
   const milestoneData = useMemo(() => {
     if (!result) return [];
@@ -263,10 +339,10 @@ export default function TrackingPage() {
     const ofd = findEvent(hist, 'out for');
     const del = findEvent(hist, 'deliver');
 
+    // Only show place text for steps that have actually occurred (or always show FROM/TO)
     const hubPlace =
-      placeHub(transit?.location) ||
-      placeHub(picked?.location) ||
-      placeHub(result.location) ||
+      (transit && placeHub(transit.location)) ||
+      (picked && placeHub(picked.location)) ||
       '';
 
     return [
@@ -276,27 +352,31 @@ export default function TrackingPage() {
         sub: 'Label Created',
         when: formatWhen(label),
         extra: '' as string,
+        reached: active >= 0,
       },
       {
         title: 'WE HAVE YOUR PACKAGE',
-        place: placeHub(picked?.location) || hubPlace,
+        place: active >= 1 ? placeHub(picked?.location) || placeHub(result.location) || hubPlace : '',
         sub: '',
         when: formatWhen(picked),
         extra: '',
+        reached: active >= 1,
       },
       {
         title: 'ON THE WAY',
-        place: hubPlace || placeHub(ofd?.location) || placeHub(del?.location),
+        place: active >= 2 ? hubPlace || placeHub(result.location) : '',
         sub: '',
-        when: formatWhen(transit) || formatWhen(picked),
+        when: formatWhen(transit),
         extra: '',
+        reached: active >= 2,
       },
       {
         title: 'OUT FOR DELIVERY',
-        place: placeHub(ofd?.location) || (delivered ? placeHub(del?.location || result.destination) : ''),
+        place: active >= 3 ? placeHub(ofd?.location) || placeHub(result.destination) : '',
         sub: '',
         when: formatWhen(ofd),
         extra: '',
+        reached: active >= 3,
       },
       delivered
         ? {
@@ -305,6 +385,7 @@ export default function TrackingPage() {
             sub: 'Delivered',
             when: formatWhen(del, true),
             extra: '',
+            reached: true,
           }
         : {
             title: 'TO',
@@ -312,9 +393,10 @@ export default function TrackingPage() {
             sub: 'Scheduled Delivery Date',
             when: result.estimatedDelivery || '',
             extra: result.estimatedDelivery ? 'By end of day' : '',
+            reached: false,
           },
     ];
-  }, [result, delivered]);
+  }, [result, delivered, active]);
 
   return (
     <div className="min-h-screen bg-white">
@@ -353,6 +435,19 @@ export default function TrackingPage() {
             Get updates
           </div>
 
+          {/* Shipping fee / package notice */}
+          {feeLabel && (
+            <div className="mx-5 mt-4 rounded-lg border border-[#4D148C]/20 bg-[#4D148C]/5 px-4 py-3 text-sm">
+              <p className="font-semibold text-gray-900">Shipping charge {feeLabel}</p>
+              {result.packageSize && (
+                <p className="text-gray-600 text-xs mt-0.5">Package size: {result.packageSize}</p>
+              )}
+              {result.service && (
+                <p className="text-gray-600 text-xs">{result.service}</p>
+              )}
+            </div>
+          )}
+
           <div className="px-5 pt-5">
             <button type="button" className="text-[#007AB7] text-sm font-semibold tracking-wide mb-6">
               MORE OPTIONS
@@ -390,24 +485,21 @@ export default function TrackingPage() {
                 const isPast = index < active;
                 const isFuture = index > active;
                 const isLast = index === milestoneData.length - 1;
-                // When delivered, entire path is complete (green)
                 const railDone = delivered || isPast || isActive;
 
                 return (
                   <div key={m.title} className="relative flex gap-4 pb-7 last:pb-4">
                     <div className="relative flex flex-col items-center w-11 flex-shrink-0">
-                      {/* Continuous rail segment to next step */}
                       {!isLast && (
                         <div
                           className="absolute top-11 bottom-[-1.75rem] w-[7px] rounded-full"
                           style={{
                             left: '50%',
                             transform: 'translateX(-50%)',
-                            backgroundColor: railDone ? brand : '#E5E7EB',
+                            backgroundColor: railDone && !isFuture ? brand : '#E5E7EB',
                           }}
                         />
                       )}
-                      {/* Short stem under delivered checkmark */}
                       {isLast && delivered && isActive && (
                         <div
                           className="absolute top-11 h-8 w-[7px] rounded-full"
@@ -418,6 +510,8 @@ export default function TrackingPage() {
                           }}
                         />
                       )}
+
+                      {/* Each step always has its own node */}
                       {isActive ? (
                         <div
                           className="relative z-10 w-11 h-11 rounded-full flex items-center justify-center"
