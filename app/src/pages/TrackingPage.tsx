@@ -48,7 +48,6 @@ function publicDetails(status: string, details?: string) {
   return '';
 }
 
-/** Parse city + state from any address-like string (no street). */
 function cityState(raw?: string | null): { city: string; state: string } {
   if (!raw) return { city: '', state: '' };
   let s = String(raw).replace(/\s+/g, ' ').trim();
@@ -61,7 +60,6 @@ function cityState(raw?: string | null): { city: string; state: string } {
     }
   }
 
-  // Strip zips and country words
   parts = parts
     .map((p) => p.replace(/\b\d{5}(-\d{4})?\b/g, '').replace(/\b(united states|usa|u\.s\.)\b/gi, '').trim())
     .filter(Boolean);
@@ -79,15 +77,23 @@ function cityState(raw?: string | null): { city: string; state: string } {
   return { city: s, state: '' };
 }
 
-/** FedEx FROM: "Mccordsville, IN US" */
+function titleCaseCity(city: string) {
+  return city
+    .toLowerCase()
+    .split(/\s+/)
+    .map((w) => (w ? w[0].toUpperCase() + w.slice(1) : ''))
+    .join(' ');
+}
+
+/** FROM / completed origin: "MOUNTVILLE, PA US" */
 function placeFrom(raw?: string | null) {
   const { city, state } = cityState(raw);
   if (!city && !state) return '';
-  if (city && state) return `${city}, ${state} US`;
-  return city || state;
+  if (city && state) return `${city}, ${state} US`.toUpperCase();
+  return (city || state).toUpperCase();
 }
 
-/** FedEx hub / on the way: "CHAMPAIGN, IL" */
+/** Hub steps: "LOS ANGELES, CA" */
 function placeHub(raw?: string | null) {
   const { city, state } = cityState(raw);
   if (!city && !state) return '';
@@ -95,7 +101,7 @@ function placeHub(raw?: string | null) {
   return (city || state).toUpperCase();
 }
 
-/** FedEx TO: "FLORISSANT, MO US" */
+/** TO while still in transit: "FLORISSANT, MO US" */
 function placeTo(raw?: string | null) {
   const { city, state } = cityState(raw);
   if (!city && !state) return '';
@@ -103,11 +109,29 @@ function placeTo(raw?: string | null) {
   return (city || state).toUpperCase();
 }
 
+/** Delivered card place: "Los Angeles, CA US" (title case city) */
+function placeDelivered(raw?: string | null) {
+  const { city, state } = cityState(raw);
+  if (!city && !state) return '';
+  if (city && state) return `${titleCaseCity(city)}, ${state} US`;
+  return titleCaseCity(city || state);
+}
+
 function milestoneIndex(status: string) {
   const s = status.toLowerCase();
   if (s.includes('deliver') && !s.includes('out')) return 4;
   if (s.includes('out for')) return 3;
-  if (s.includes('on the way') || s.includes('in transit') || s.includes('depart') || s.includes('arriv') || s.includes('facility') || s.includes('held') || s.includes('hold') || s.includes('exception')) return 2;
+  if (
+    s.includes('on the way') ||
+    s.includes('in transit') ||
+    s.includes('depart') ||
+    s.includes('arriv') ||
+    s.includes('facility') ||
+    s.includes('held') ||
+    s.includes('hold') ||
+    s.includes('exception')
+  )
+    return 2;
   if (s.includes('pick') || s.includes('we have')) return 1;
   if (s.includes('label') || s.includes('created') || s.includes('shipped')) return 0;
   return 2;
@@ -117,9 +141,12 @@ function findEvent(history: TrackingEvent[], ...keys: string[]) {
   return history.find((h) => keys.some((k) => h.status.toLowerCase().includes(k)));
 }
 
-function formatWhen(ev?: TrackingEvent) {
+function formatWhen(ev?: TrackingEvent, deliveredStyle = false) {
   if (!ev) return '';
-  if (ev.date && ev.time) return `${ev.date} ${ev.time}`;
+  if (ev.date && ev.time) {
+    if (deliveredStyle) return `${ev.date} at ${ev.time}`;
+    return `${ev.date} ${ev.time}`;
+  }
   return ev.date || ev.time || '';
 }
 
@@ -149,14 +176,14 @@ export default function TrackingPage() {
     setSetupImage(null);
     setTransitImage(null);
     setDeliveredImage(null);
-    const [setup, transit, delivered] = await Promise.all([
+    const [setup, transit, deliveredImg] = await Promise.all([
       fetchImage(number, 'setup'),
       fetchImage(number, 'transit'),
       /deliver/i.test(status) && !/out for/i.test(status) ? fetchImage(number, 'delivered') : Promise.resolve(null),
     ]);
     if (setup) setSetupImage(setup);
     if (transit) setTransitImage(transit);
-    if (delivered) setDeliveredImage(delivered);
+    if (deliveredImg) setDeliveredImage(deliveredImg);
   };
 
   const trackNumber = async (raw: string) => {
@@ -224,6 +251,7 @@ export default function TrackingPage() {
 
   const active = useMemo(() => (result ? milestoneIndex(result.status) : 0), [result]);
   const delivered = !!result && /deliver/i.test(result.status) && !/out for/i.test(result.status);
+  /** FedEx green when delivered, purple while in network */
   const brand = delivered ? '#00843D' : '#4D148C';
 
   const milestoneData = useMemo(() => {
@@ -258,14 +286,14 @@ export default function TrackingPage() {
       },
       {
         title: 'ON THE WAY',
-        place: hubPlace,
+        place: hubPlace || placeHub(ofd?.location) || placeHub(del?.location),
         sub: '',
         when: formatWhen(transit) || formatWhen(picked),
         extra: '',
       },
       {
         title: 'OUT FOR DELIVERY',
-        place: placeHub(ofd?.location) || '',
+        place: placeHub(ofd?.location) || (delivered ? placeHub(del?.location || result.destination) : ''),
         sub: '',
         when: formatWhen(ofd),
         extra: '',
@@ -273,9 +301,9 @@ export default function TrackingPage() {
       delivered
         ? {
             title: 'DELIVERED',
-            place: placeTo(del?.location || result.destination) || '',
+            place: placeDelivered(del?.location || result.destination) || '',
             sub: 'Delivered',
-            when: formatWhen(del),
+            when: formatWhen(del, true),
             extra: '',
           }
         : {
@@ -356,19 +384,19 @@ export default function TrackingPage() {
               </div>
             </div>
 
-            {/* FedEx-style vertical timeline */}
             <div className="relative">
               {milestoneData.map((m, index) => {
                 const isActive = index === active;
                 const isPast = index < active;
                 const isFuture = index > active;
                 const isLast = index === milestoneData.length - 1;
-                const railDone = isPast || isActive;
+                // When delivered, entire path is complete (green)
+                const railDone = delivered || isPast || isActive;
 
                 return (
-                  <div key={m.title} className="relative flex gap-4 pb-7 last:pb-2">
-                    {/* Left rail + node */}
+                  <div key={m.title} className="relative flex gap-4 pb-7 last:pb-4">
                     <div className="relative flex flex-col items-center w-11 flex-shrink-0">
+                      {/* Continuous rail segment to next step */}
                       {!isLast && (
                         <div
                           className="absolute top-11 bottom-[-1.75rem] w-[7px] rounded-full"
@@ -379,16 +407,29 @@ export default function TrackingPage() {
                           }}
                         />
                       )}
+                      {/* Short stem under delivered checkmark */}
+                      {isLast && delivered && isActive && (
+                        <div
+                          className="absolute top-11 h-8 w-[7px] rounded-full"
+                          style={{
+                            left: '50%',
+                            transform: 'translateX(-50%)',
+                            backgroundColor: brand,
+                          }}
+                        />
+                      )}
                       {isActive ? (
                         <div
                           className="relative z-10 w-11 h-11 rounded-full flex items-center justify-center"
                           style={{
                             backgroundColor: brand,
-                            boxShadow: `0 0 0 10px ${delivered ? 'rgba(0,132,61,0.12)' : 'rgba(77,20,140,0.12)'}`,
+                            boxShadow: delivered
+                              ? '0 0 0 10px rgba(0,132,61,0.15)'
+                              : '0 0 0 10px rgba(77,20,140,0.12)',
                           }}
                         >
                           {delivered && index === 4 ? (
-                            <Check className="h-5 w-5 text-white stroke-[3]" />
+                            <Check className="h-6 w-6 text-white stroke-[3]" />
                           ) : index <= 1 ? (
                             <MapPin className="h-5 w-5 text-white" />
                           ) : (
@@ -397,16 +438,15 @@ export default function TrackingPage() {
                         </div>
                       ) : (
                         <div
-                          className="relative z-10 w-3.5 h-3.5 mt-4 rounded-full border-2 bg-white"
+                          className="relative z-10 w-3.5 h-3.5 mt-4 rounded-full border-2"
                           style={{
-                            borderColor: isPast ? brand : '#D1D5DB',
-                            backgroundColor: isPast ? '#fff' : '#D1D5DB',
+                            borderColor: isPast || delivered ? brand : '#D1D5DB',
+                            backgroundColor: isPast || delivered ? '#fff' : '#D1D5DB',
                           }}
                         />
                       )}
                     </div>
 
-                    {/* Content card */}
                     <div
                       className={`flex-1 min-w-0 ${
                         isActive ? 'bg-[#F3F4F6] rounded-2xl px-4 py-3 -ml-0.5' : 'pt-1.5'
@@ -476,10 +516,10 @@ export default function TrackingPage() {
             <button
               type="button"
               onClick={() => setShowHistory((v) => !v)}
-              className="flex items-center gap-1 text-[#007AB7] text-sm font-medium mb-6 mt-2"
+              className="flex items-center gap-1 text-[#007AB7] text-sm font-medium mb-6 mt-1"
             >
               <ChevronDown className={`h-4 w-4 transition-transform ${showHistory ? 'rotate-180' : ''}`} />
-              View travel history
+              <span className="underline">View travel history</span>
             </button>
 
             {showHistory && (
