@@ -5,6 +5,20 @@ function send(res: any, status: number, body: unknown) {
   res.status(status).json(body);
 }
 
+/** Public-safe event detail — never expose internal wording */
+function publicEventDetails(status: string, provided?: string) {
+  const raw = String(provided || '').trim();
+  if (raw && !/admin/i.test(raw)) return raw;
+  const s = String(status || '').toLowerCase();
+  if (s.includes('label') || s.includes('created')) return 'Shipping label created';
+  if (s.includes('pick')) return 'We have your package';
+  if (s.includes('out for')) return 'On a local truck';
+  if (s.includes('deliver')) return 'Delivered';
+  if (s.includes('hold')) return 'Held at location';
+  if (s.includes('transit') || s.includes('on the way')) return 'On the way';
+  return 'Shipment updated';
+}
+
 async function listShipments(client: Client, number?: string) {
   const params: string[] = [];
   let where = '';
@@ -36,7 +50,7 @@ async function listShipments(client: Client, number?: string) {
         location: e.location || '',
         status: e.status || '',
         completed: true,
-        details: e.details || '',
+        details: publicEventDetails(e.status || '', e.details || ''),
       });
     }
   }
@@ -77,14 +91,16 @@ export default async function handler(req: any, res: any) {
       const b = req.body || {};
       const number = String(b.number || '').trim();
       if (!number) return send(res, 400, { error: 'Tracking number required' });
+      const status = b.status || 'In transit';
+      const details = publicEventDetails(status, b.details);
       await withDb(async (c) => {
         await c.query(
           `INSERT INTO shipments (tracking_number, status, origin, destination, service, service_id, current_location, estimated_delivery_text, updated_at)
            VALUES ($1,$2,$3,$4,$5,$5,$6,$7,now())
            ON CONFLICT (tracking_number) DO UPDATE SET status = EXCLUDED.status, origin = EXCLUDED.origin, destination = EXCLUDED.destination, service = EXCLUDED.service, service_id = EXCLUDED.service_id, current_location = EXCLUDED.current_location, estimated_delivery_text = EXCLUDED.estimated_delivery_text, updated_at = now()`,
-          [number, b.status || 'In transit', b.origin || '', b.destination || '', b.service || '', b.location || '', b.estimatedDelivery || '']
+          [number, status, b.origin || '', b.destination || '', b.service || '', b.location || '', b.estimatedDelivery || '']
         );
-        await c.query(`INSERT INTO shipment_events (tracking_number, location, status, details) VALUES ($1,$2,$3,$4)`, [number, b.location || b.destination || '', b.status || 'In transit', 'Admin update']);
+        await c.query(`INSERT INTO shipment_events (tracking_number, location, status, details) VALUES ($1,$2,$3,$4)`, [number, b.location || b.destination || '', status, details]);
       });
       return send(res, 200, { ok: true, number });
     }
