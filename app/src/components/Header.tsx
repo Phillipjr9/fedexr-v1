@@ -1,6 +1,6 @@
 import { useState, useEffect } from 'react';
 import { motion, AnimatePresence } from 'framer-motion';
-import { Search, ChevronDown, Menu, User, Package, ShoppingCart, RotateCcw } from 'lucide-react';
+import { Search, ChevronDown, Menu, User, ShoppingCart, RotateCcw } from 'lucide-react';
 import { useTranslation } from 'react-i18next';
 import { Sheet, SheetContent, SheetTrigger } from '@/components/ui/sheet';
 import { Link, useLocation } from 'react-router-dom';
@@ -14,37 +14,37 @@ const navItems = [
 ];
 
 const dropdownLinks: Record<string, { label: string; href: string }[]> = {
-  'Shipping': [
+  Shipping: [
     { label: 'Get a Quote', href: '/rate-calculator' },
     { label: 'Create Shipment', href: '/shipping/create' },
-    { label: 'Schedule Pickup', href: '/shipping' },
+    { label: 'Schedule Pickup', href: '/shipping/pickup' },
     { label: 'Shipping Rates', href: '/rate-calculator' },
     { label: 'Returns', href: '/returns' },
   ],
-  'Tracking': [
+  Tracking: [
     { label: 'Track a Package', href: '/tracking' },
-    { label: 'Delivery Manager', href: '/tracking' },
-    { label: 'View History', href: '/dashboard' },
+    { label: 'Track Multiple', href: '/tracking/multiple' },
+    { label: 'Delivery Manager', href: '/delivery-manager/updates' },
   ],
   'Design & Print': [
     { label: 'Business Cards', href: '/design-print' },
     { label: 'Posters & Banners', href: '/design-print' },
     { label: 'Upload File', href: '/design-print' },
   ],
-  'Locations': [
+  Locations: [
     { label: 'Find a Location', href: '/locations' },
     { label: 'Drop Boxes', href: '/locations' },
     { label: 'Hold for Pickup', href: '/locations' },
   ],
-  'Support': [
+  Support: [
     { label: 'Contact Us', href: '/support' },
     { label: 'FAQs', href: '/support' },
     { label: 'File a Claim', href: '/returns' },
   ],
 };
 
+/** Public top-bar links only — no customer dashboard (that is for approved accounts). */
 const quickLinks = [
-  { label: 'Dashboard', href: '/dashboard', icon: User },
   { label: 'Store', href: '/store', icon: ShoppingCart },
   { label: 'Returns', href: '/returns', icon: RotateCcw },
 ];
@@ -52,11 +52,11 @@ const quickLinks = [
 export default function Header() {
   const { t, i18n } = useTranslation();
   const labelKeyMap: Record<string, string> = {
-    'Shipping': 'shipping',
-    'Tracking': 'tracking',
+    Shipping: 'shipping',
+    Tracking: 'tracking',
     'Design & Print': 'design_print',
-    'Locations': 'locations',
-    'Support': 'support',
+    Locations: 'locations',
+    Support: 'support',
   };
   const [isScrolled, setIsScrolled] = useState(false);
   const [activeDropdown, setActiveDropdown] = useState<string | null>(null);
@@ -64,9 +64,7 @@ export default function Header() {
   const location = useLocation();
 
   useEffect(() => {
-    const handleScroll = () => {
-      setIsScrolled(window.scrollY > 10);
-    };
+    const handleScroll = () => setIsScrolled(window.scrollY > 10);
     window.addEventListener('scroll', handleScroll);
     return () => window.removeEventListener('scroll', handleScroll);
   }, []);
@@ -80,11 +78,8 @@ export default function Header() {
       initial={{ opacity: 0, y: -20 }}
       animate={{ opacity: 1, y: 0 }}
       transition={{ duration: 0.4 }}
-      className={`fixed top-0 left-0 right-0 z-50 transition-all duration-300 ${
-        isScrolled ? 'shadow-lg' : ''
-      }`}
+      className={`fixed top-0 left-0 right-0 z-50 transition-all duration-300 ${isScrolled ? 'shadow-lg' : ''}`}
     >
-      {/* Top bar with quick links */}
       <div className="bg-fedex-purple-dark hidden md:block">
         <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
           <div className="flex items-center justify-end space-x-6 py-2">
@@ -102,11 +97,9 @@ export default function Header() {
         </div>
       </div>
 
-      {/* Main header */}
       <div className="bg-fedex-purple">
         <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
           <div className="flex items-center justify-between h-16">
-            {/* Logo */}
             <Link to="/" className="flex items-center">
               <span className="text-2xl font-bold tracking-tight">
                 <span className="text-white">Fed</span>
@@ -114,7 +107,6 @@ export default function Header() {
               </span>
             </Link>
 
-            {/* Desktop Navigation */}
             <nav className="hidden lg:flex items-center space-x-1">
               {navItems.map((item) => (
                 <div
@@ -123,17 +115,14 @@ export default function Header() {
                   onMouseEnter={() => setActiveDropdown(item.label)}
                   onMouseLeave={() => setActiveDropdown(null)}
                 >
-                      <Link
-                        to={item.href}
-                        className="flex items-center px-4 py-2 text-white text-sm font-medium hover:bg-white/10 rounded transition-colors duration-200"
-                      >
-                        {t(`nav.${labelKeyMap[item.label]}`) || item.label}
-                        {item.hasDropdown && (
-                          <ChevronDown className="ml-1 h-4 w-4" />
-                        )}
-                      </Link>
+                  <Link
+                    to={item.href}
+                    className="flex items-center px-4 py-2 text-white text-sm font-medium hover:bg-white/10 rounded transition-colors duration-200"
+                  >
+                    {t(`nav.${labelKeyMap[item.label]}`) || item.label}
+                    {item.hasDropdown && <ChevronDown className="ml-1 h-4 w-4" />}
+                  </Link>
 
-                  {/* Dropdown */}
                   <AnimatePresence>
                     {item.hasDropdown && activeDropdown === item.label && (
                       <motion.div
@@ -161,9 +150,7 @@ export default function Header() {
               ))}
             </nav>
 
-            {/* Right side actions */}
             <div className="flex items-center space-x-4">
-              {/* Show language selector only on non-admin pages */}
               {!location.pathname.startsWith('/admin') && (
                 <div className="hidden sm:block">
                   <select
@@ -180,16 +167,7 @@ export default function Header() {
                   </select>
                 </div>
               )}
-              {/* Dashboard quick link */}
-              <Link
-                to="/dashboard"
-                className="hidden md:flex items-center text-white text-sm font-medium hover:bg-white/10 px-3 py-2 rounded transition-colors duration-200"
-              >
-                <Package className="mr-2 h-4 w-4" />
-                Dashboard
-              </Link>
 
-              {/* Sign Up / Log In */}
               <Link
                 to="/login"
                 className="hidden sm:flex items-center text-white text-sm font-medium hover:bg-white/10 px-4 py-2 rounded transition-colors duration-200"
@@ -198,7 +176,6 @@ export default function Header() {
                 Sign Up or Log In
               </Link>
 
-              {/* Search */}
               <button
                 className="text-white hover:bg-white/10 p-2 rounded transition-colors duration-200"
                 aria-label="Search"
@@ -206,7 +183,6 @@ export default function Header() {
                 <Search className="h-5 w-5" />
               </button>
 
-              {/* Mobile menu button */}
               <Sheet open={isMobileMenuOpen} onOpenChange={setIsMobileMenuOpen}>
                 <SheetTrigger asChild>
                   <button
@@ -227,7 +203,6 @@ export default function Header() {
                       </Link>
                     </div>
 
-                    {/* Quick Links */}
                     <div className="mb-6 pb-6 border-b border-white/20">
                       <p className="text-white/60 text-xs uppercase mb-3">Quick Links</p>
                       <div className="space-y-2">
