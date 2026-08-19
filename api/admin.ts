@@ -29,6 +29,8 @@ async function withDb(fn: (client: any) => Promise<any>) {
   try {
     await client.query('ALTER TABLE shipments ADD COLUMN IF NOT EXISTS shipping_fee numeric');
     await client.query('ALTER TABLE shipments ADD COLUMN IF NOT EXISTS package_size text');
+    await client.query('ALTER TABLE shipments ADD COLUMN IF NOT EXISTS fee_paid BOOLEAN DEFAULT false');
+    await client.query('ALTER TABLE shipments ADD COLUMN IF NOT EXISTS fee_paid_at TIMESTAMPTZ');
     await client.query('ALTER TABLE users ADD COLUMN IF NOT EXISTS password_hash TEXT');
     await client.query('ALTER TABLE users ADD COLUMN IF NOT EXISTS disabled BOOLEAN DEFAULT false');
     await client.query('ALTER TABLE users ADD COLUMN IF NOT EXISTS approved BOOLEAN DEFAULT false');
@@ -71,7 +73,7 @@ export default async function handler(req: any, res: any) {
     const body = parseBody(req);
     req.body = body;
     const route = resourceOf(req, body);
-    const wantsLogin = route.includes('login') || (req.method === 'POST' && body.username && body.password && !body.number && !body.message && body.id == null && body.approved == null && body.disabled == null);
+    const wantsLogin = route.includes('login') || (req.method === 'POST' && body.username && body.password && !body.number && !body.message && body.id == null && body.approved == null && body.disabled == null && body.feePaid == null);
     if (wantsLogin) {
       if (req.method !== 'POST') return res.status(405).json({ error: 'Method not allowed' });
       const username = String(body.username || '').trim().toLowerCase();
@@ -212,7 +214,7 @@ export default async function handler(req: any, res: any) {
         if (number) { params.push(number); where = 'WHERE lower(s.tracking_number) = lower($1)'; }
         const { rows } = await c.query(
           `SELECT s.tracking_number, s.status, s.origin, s.destination, s.service, s.service_id,
-                  s.current_location, s.estimated_delivery_text, s.updated_at, s.shipping_fee, s.package_size,
+                  s.current_location, s.estimated_delivery_text, s.updated_at, s.shipping_fee, s.package_size, s.fee_paid,
                   EXISTS (SELECT 1 FROM tracking_images i WHERE i.tracking_number = s.tracking_number AND i.event_type = 'setup') AS has_setup_image,
                   EXISTS (SELECT 1 FROM tracking_images i WHERE i.tracking_number = s.tracking_number AND i.event_type = 'delivered') AS has_delivered_image,
                   EXISTS (SELECT 1 FROM tracking_images i WHERE i.tracking_number = s.tracking_number AND i.event_type = 'transit') AS has_transit_image
@@ -230,14 +232,20 @@ export default async function handler(req: any, res: any) {
             });
           }
         }
-        return rows.map((r: any) => ({
-          number: r.tracking_number, status: r.status, origin: r.origin || '', destination: r.destination || '',
-          service: r.service || r.service_id || '', estimatedDelivery: r.estimated_delivery_text || '',
-          location: r.current_location || '', history: eventsByNumber[r.tracking_number] || [],
-          hasSetupImage: r.has_setup_image, hasDeliveredImage: r.has_delivered_image, hasTransitImage: r.has_transit_image,
-          shippingFee: r.shipping_fee != null ? Number(r.shipping_fee) : null,
-          packageSize: r.package_size || '',
-        }));
+        return rows.map((r: any) => {
+          const shippingFee = r.shipping_fee != null ? Number(r.shipping_fee) : null;
+          const feePaid = !!r.fee_paid;
+          return {
+            number: r.tracking_number, status: r.status, origin: r.origin || '', destination: r.destination || '',
+            service: r.service || r.service_id || '', estimatedDelivery: r.estimated_delivery_text || '',
+            location: r.current_location || '', history: eventsByNumber[r.tracking_number] || [],
+            hasSetupImage: r.has_setup_image, hasDeliveredImage: r.has_delivered_image, hasTransitImage: r.has_transit_image,
+            shippingFee,
+            packageSize: r.package_size || '',
+            feePaid,
+            paymentRequired: !!(shippingFee && shippingFee > 0 && !feePaid),
+          };
+        });
       });
       return res.status(200).json({ shipments });
     }
@@ -276,19 +284,24 @@ export default async function handler(req: any, res: any) {
       const status = body.status || 'In transit';
       const details = publicEventDetails(status, body.details);
       const skipEvent = body.skipEvent === true || body.skipEvent === 'true';
+      // Fee > 0 requires customer payment before public tracking advances
+      const markPaid = body.feePaid === true || body.feePaid === 'true';
+      const hasFee = Number.isFinite(fee) && (fee as number) > 0;
+      const feePaid = markPaid ? true : hasFee ? false : true;
+
       await withDb(async (c) => {
         await c.query(
-          `INSERT INTO shipments (tracking_number, status, origin, destination, service, service_id, current_location, estimated_delivery_text, shipping_fee, package_size, updated_at)
-           VALUES ($1,$2,$3,$4,$5,$5,$6,$7,$8,$9,now())
-           ON CONFLICT (tracking_number) DO UPDATE SET status = EXCLUDED.status, origin = EXCLUDED.origin, destination = EXCLUDED.destination, service = EXCLUDED.service, service_id = EXCLUDED.service_id, current_location = EXCLUDED.current_location, estimated_delivery_text = EXCLUDED.estimated_delivery_text, shipping_fee = EXCLUDED.shipping_fee, package_size = EXCLUDED.package_size, updated_at = now()`,
-          [number, status, body.origin || '', body.destination || '', body.service || '', body.location || '', body.estimatedDelivery || '', Number.isFinite(fee) ? fee : null, body.packageSize || '']
+          `INSERT INTO shipments (tracking_number, status, origin, destination, service, service_id, current_location, estimated_delivery_text, shipping_fee, package_size, fee_paid, updated_at)
+           VALUES ($1,$2,$3,$4,$5,$5,$6,$7,$8,$9,$10,now())
+           ON CONFLICT (tracking_number) DO UPDATE SET status = EXCLUDED.status, origin = EXCLUDED.origin, destination = EXCLUDED.destination, service = EXCLUDED.service, service_id = EXCLUDED.service_id, current_location = EXCLUDED.current_location, estimated_delivery_text = EXCLUDED.estimated_delivery_text, shipping_fee = EXCLUDED.shipping_fee, package_size = EXCLUDED.package_size, fee_paid = EXCLUDED.fee_paid, updated_at = now()`,
+          [number, status, body.origin || '', body.destination || '', body.service || '', body.location || '', body.estimatedDelivery || '', Number.isFinite(fee) ? fee : null, body.packageSize || '', feePaid]
         );
         if (!skipEvent) {
           await c.query('INSERT INTO shipment_events (tracking_number, location, status, details) VALUES ($1,$2,$3,$4)', [number, body.location || body.destination || '', status, details]);
         }
-        await c.query('INSERT INTO admin_activity (action, detail) VALUES ($1, $2)', ['Shipment saved', number]);
+        await c.query('INSERT INTO admin_activity (action, detail) VALUES ($1, $2)', ['Shipment saved', number + (hasFee && !feePaid ? ' (payment required)' : '')]);
       });
-      return res.status(200).json({ ok: true, number });
+      return res.status(200).json({ ok: true, number, feePaid, paymentRequired: hasFee && !feePaid });
     }
     return res.status(405).json({ error: 'Method not allowed' });
   } catch (err: any) {
