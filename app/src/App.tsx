@@ -87,18 +87,18 @@ function AppRoutes() {
     return (
       <Routes>
         <Route path="/admin" element={<AdminLogin />} />
-        <Route path="/admin" element={<AdminLayout />}>
-          <Route index element={<Navigate to="dashboard" replace />} />
-          <Route path="dashboard" element={<AdminDashboard />} />
-          <Route path="shipments" element={<AdminShipments />} />
-          <Route path="holds" element={<AdminHolds />} />
-          <Route path="users" element={<AdminUsers />} />
-          <Route path="locations" element={<AdminLocations />} />
-          <Route path="banner" element={<AdminBanner />} />
-          <Route path="activity" element={<AdminActivity />} />
-          <Route path="reports" element={<AdminReports />} />
-          <Route path="settings" element={<AdminSettings />} />
+        <Route element={<AdminLayout />}>
+          <Route path="/admin/dashboard" element={<AdminDashboard />} />
+          <Route path="/admin/shipments" element={<AdminShipments />} />
+          <Route path="/admin/holds" element={<AdminHolds />} />
+          <Route path="/admin/users" element={<AdminUsers />} />
+          <Route path="/admin/locations" element={<AdminLocations />} />
+          <Route path="/admin/banner" element={<AdminBanner />} />
+          <Route path="/admin/activity" element={<AdminActivity />} />
+          <Route path="/admin/reports" element={<AdminReports />} />
+          <Route path="/admin/settings" element={<AdminSettings />} />
         </Route>
+        <Route path="/admin/*" element={<Navigate to="/admin/dashboard" replace />} />
       </Routes>
     );
   }

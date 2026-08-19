@@ -4,7 +4,6 @@ import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { toast } from 'sonner';
 import { FEDEX_SERVICES, generateTrackingNumber, geocodePlaces, fetchRoute, type Place } from '@/lib/places';
-import { HOLD_REASON_LABELS } from '@/lib/holdReasons';
 import { PACKAGE_SIZES, formatFee, quoteFee } from '@/lib/shippingRates';
 import { apiAddEvent, apiDeleteShipment, apiListShipments, apiSaveShipment, apiUploadImage, apiMarkPaid, type ImageEventType } from '@/lib/adminApi';
 import { Pencil } from 'lucide-react';
@@ -47,6 +46,8 @@ type ShipmentRow = {
 const DEFAULT_PAYMENT_INSTRUCTIONS =
   'Pay via Zelle / bank transfer to the account provided by support. Include your tracking number in the memo. After payment, submit your name and email on the tracking page so we can unlock progress.';
 
+const DEFAULT_PACKAGE_ID = PACKAGE_SIZES[0]?.id ?? 'medium';
+
 export default function AdminShipments() {
   const [searchParams] = useSearchParams();
   const [list, setList] = useState<ShipmentRow[]>([]);
@@ -59,7 +60,7 @@ export default function AdminShipments() {
   const [origin, setOrigin] = useState('');
   const [destination, setDestination] = useState('');
   const [serviceId, setServiceId] = useState(FEDEX_SERVICES[0]?.id || 'FEDEX_GROUND');
-  const [packageSize, setPackageSize] = useState(PACKAGE_SIZES[0] || 'Medium box');
+  const [packageSize, setPackageSize] = useState(DEFAULT_PACKAGE_ID);
   const [manualFee, setManualFee] = useState('');
   const [collectPayment, setCollectPayment] = useState(false);
   const [paymentInstructions, setPaymentInstructions] = useState(DEFAULT_PAYMENT_INSTRUCTIONS);
@@ -70,7 +71,8 @@ export default function AdminShipments() {
   const [photoKind, setPhotoKind] = useState<ImageEventType>('setup');
   const [uploading, setUploading] = useState(false);
 
-  const quoted = useMemo(() => quoteFee(packageSize, serviceId), [packageSize, serviceId]);
+  const serviceLabel = FEDEX_SERVICES.find((s) => s.id === serviceId)?.label || serviceId;
+  const quoted = useMemo(() => quoteFee(packageSize, serviceLabel), [packageSize, serviceLabel]);
   const feeNum = manualFee.trim() ? Number(manualFee) : quoted;
 
   async function refresh() {
@@ -90,7 +92,7 @@ export default function AdminShipments() {
   }, []);
 
   useEffect(() => {
-    const n = searchParams.get('number');
+    const n = searchParams.get('number') || searchParams.get('edit');
     if (n && list.length) {
       const s = list.find((x) => x.number === n);
       if (s) loadForEdit(s);
@@ -104,7 +106,10 @@ export default function AdminShipments() {
     setOrigin(s.origin || '');
     setDestination(s.destination || '');
     setServiceId(s.serviceId || FEDEX_SERVICES[0]?.id || 'FEDEX_GROUND');
-    setPackageSize(s.packageSize || PACKAGE_SIZES[0] || 'Medium box');
+    const sizeId =
+      PACKAGE_SIZES.find((p) => p.id === s.packageSize || p.label === s.packageSize)?.id ||
+      DEFAULT_PACKAGE_ID;
+    setPackageSize(sizeId);
     setManualFee(s.shippingFee != null ? String(s.shippingFee) : '');
     setCollectPayment(!!s.collectPayment);
     if (s.paymentInstructions) setPaymentInstructions(s.paymentInstructions);
@@ -274,7 +279,7 @@ export default function AdminShipments() {
             <label className="text-xs text-gray-500">Package size</label>
             <select className="w-full border rounded h-10 px-2" value={packageSize} onChange={(e) => setPackageSize(e.target.value)}>
               {PACKAGE_SIZES.map((s) => (
-                <option key={s}>{s}</option>
+                <option key={s.id} value={s.id}>{s.label}</option>
               ))}
             </select>
           </div>
