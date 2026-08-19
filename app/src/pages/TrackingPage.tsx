@@ -1,5 +1,317 @@
 import { useEffect, useMemo, useState } from 'react';
-// RESTORED - see next commit for full file
+import { Link, useSearchParams } from 'react-router-dom';
+import {
+  Search,
+  Pencil,
+  Star,
+  MapPin,
+  ArrowRight,
+  Check,
+  ChevronDown,
+  MessageCircle,
+  Barcode,
+} from 'lucide-react';
+import { Button } from '@/components/ui/button';
+import { Input } from '@/components/ui/input';
+import { toast } from 'sonner';
+
+interface TrackingEvent {
+  date: string;
+  time: string;
+  location: string;
+  status: string;
+  completed?: boolean;
+  detail?: string;
+}
+
+interface TrackResult {
+  number: string;
+  status: string;
+  origin: string;
+  destination: string;
+  service?: string;
+  estimatedDelivery?: string;
+  currentLocation?: string;
+  shippingFee?: number | null;
+  packageSize?: string;
+  feePaid?: boolean;
+  collectPayment?: boolean;
+  paymentRequired?: boolean;
+  paymentInstructions?: string;
+  events: TrackingEvent[];
+  setupImage?: string | null;
+  transitImage?: string | null;
+  deliveredImage?: string | null;
+}
+
+function formatFee(n: number) {
+  return new Intl.NumberFormat('en-US', { style: 'currency', currency: 'USD' }).format(n);
+}
+
 export default function TrackingPage() {
-  return <div className="p-8">Loading tracking… Refresh after deploy.</div>;
+  const [searchParams, setSearchParams] = useSearchParams();
+  const [query, setQuery] = useState(searchParams.get('number') || searchParams.get('trkn') || '');
+  const [result, setResult] = useState<TrackResult | null>(null);
+  const [loading, setLoading] = useState(false);
+  const [error, setError] = useState('');
+  const [showImages, setShowImages] = useState(false);
+  const [showHistory, setShowHistory] = useState(false);
+  const [payName, setPayName] = useState('');
+  const [payEmail, setPayEmail] = useState('');
+  const [paying, setPaying] = useState(false);
+
+  async function runTrack(num?: string) {
+    const number = (num || query).trim();
+    if (!number) return;
+    setLoading(true);
+    setError('');
+    setResult(null);
+    setShowImages(false);
+    try {
+      const res = await fetch(`/api/track?number=${encodeURIComponent(number)}`);
+      const trackJson = await res.json().catch(() => ({}));
+      if (!res.ok) throw new Error(trackJson.error || 'Tracking not found');
+      const shipment = trackJson.shipment || trackJson;
+      setResult({
+        number: shipment.number || number,
+        status: shipment.status || 'Label created',
+        origin: shipment.origin || '',
+        destination: shipment.destination || '',
+        service: shipment.service || '',
+        estimatedDelivery: shipment.estimatedDelivery || shipment.estimated_delivery_text || '',
+        currentLocation: shipment.currentLocation || shipment.current_location || '',
+        shippingFee: shipment.shippingFee ?? shipment.shipping_fee ?? null,
+        packageSize: shipment.packageSize || shipment.package_size || '',
+        feePaid: !!shipment.feePaid || !!shipment.fee_paid,
+        collectPayment: !!shipment.collectPayment || !!shipment.collect_payment,
+        paymentRequired: !!trackJson.paymentRequired || !!shipment.paymentRequired,
+        paymentInstructions: trackJson.paymentInstructions || shipment.paymentInstructions || '',
+        events: (trackJson.events || shipment.events || []).map((ev: any) => ({
+          date: ev.date || '',
+          time: ev.time || '',
+          location: ev.location || '',
+          status: ev.status || ev.message || '',
+          completed: !!ev.completed,
+          detail: ev.detail || ev.message || '',
+        })),
+        setupImage: trackJson.setupImage || shipment.setupImage || null,
+        transitImage: trackJson.transitImage || shipment.transitImage || null,
+        deliveredImage: trackJson.deliveredImage || shipment.deliveredImage || null,
+      });
+      setSearchParams({ number });
+    } catch (e: any) {
+      setError(e.message || 'Could not track');
+    } finally {
+      setLoading(false);
+    }
+  }
+
+  useEffect(() => {
+    const n = searchParams.get('number') || searchParams.get('trkn');
+    if (n) {
+      setQuery(n);
+      runTrack(n);
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  const paymentRequired = !!(result?.paymentRequired);
+  const feeLabel = result?.shippingFee != null && result.shippingFee > 0 ? formatFee(result.shippingFee) : '';
+
+  const activeIndex = useMemo(() => {
+    if (!result) return -1;
+    if (result.paymentRequired) return 0;
+    const events = result.events || [];
+    const lastDone = events.map((e, i) => (e.completed ? i : -1)).filter((i) => i >= 0).pop();
+    return lastDone ?? 0;
+  }, [result]);
+
+  const delivered = !!result && !paymentRequired && /deliver/i.test(result.status) && !/out for/i.test(result.status);
+
+  async function submitPayment(e: React.FormEvent) {
+    e.preventDefault();
+    if (!result) return;
+    setPaying(true);
+    try {
+      const res = await fetch('/api/pay', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ number: result.number, name: payName.trim(), email: payEmail.trim(), offline: true }),
+      });
+      const json = await res.json().catch(() => ({}));
+      if (!res.ok) throw new Error(json.error || 'Payment record failed');
+      toast.success(json.message || 'Payment recorded. Tracking will unlock shortly.');
+      await runTrack(result.number);
+    } catch (err: any) {
+      toast.error(err.message || 'Could not record payment');
+    } finally {
+      setPaying(false);
+    }
+  }
+
+  const setupImage = result?.setupImage;
+  const transitImage = result?.transitImage;
+  const deliveredImage = result?.deliveredImage;
+
+  return (
+    <div className="min-h-screen bg-[#f5f5f5] text-gray-900">
+      {!result && (
+        <section className="max-w-lg mx-auto px-4 pt-10 pb-16">
+          <div className="bg-white rounded-xl shadow-sm border p-6 space-y-4">
+            <h1 className="text-xl font-semibold">Track a package</h1>
+            <form
+              onSubmit={(e) => {
+                e.preventDefault();
+                runTrack();
+              }}
+              className="flex gap-2"
+            >
+              <Input
+                value={query}
+                onChange={(e) => setQuery(e.target.value)}
+                placeholder="Tracking number"
+                className="flex-1"
+              />
+              <Button type="submit" disabled={loading} className="bg-[#FF6200] hover:bg-[#e55a00] text-white">
+                {loading ? '…' : <Search className="h-4 w-4" />}
+              </Button>
+            </form>
+            {error && <p className="text-sm text-red-600">{error}</p>}
+          </div>
+        </section>
+      )}
+
+      {result && (
+        <div className="max-w-lg mx-auto bg-white min-h-screen pb-28 relative">
+          <div className="bg-[#FF6200] text-white text-center text-sm font-semibold tracking-wide py-2.5 uppercase">Get updates</div>
+
+          {paymentRequired && feeLabel && (
+            <div className="mx-5 mt-4 rounded-xl border-2 border-[#FF6200] bg-orange-50 px-4 py-4 text-sm space-y-3">
+              <div>
+                <p className="font-bold text-gray-900 text-base">Payment required</p>
+                <p className="text-gray-700 mt-1">
+                  A shipping fee of <span className="font-semibold">{feeLabel}</span> must be paid before this package can move in the network and tracking can advance past Label Created.
+                </p>
+                {result.packageSize && <p className="text-gray-600 text-xs mt-1">Package: {result.packageSize}</p>}
+                {result.service && <p className="text-gray-600 text-xs">{result.service}</p>}
+              </div>
+              {result.paymentInstructions && (
+                <div className="rounded-lg border border-amber-300 bg-white px-3 py-2 text-xs text-gray-800 whitespace-pre-wrap">
+                  <p className="font-semibold text-gray-900 mb-1">How to pay (offline)</p>
+                  {result.paymentInstructions}
+                </div>
+              )}
+              <form onSubmit={submitPayment} className="space-y-2 bg-white rounded-lg border p-3">
+                <p className="text-xs text-gray-500">After you pay offline, submit your details so tracking can unlock.</p>
+                <Input placeholder="Full name" value={payName} onChange={(e) => setPayName(e.target.value)} required />
+                <Input type="email" placeholder="Email for receipt" value={payEmail} onChange={(e) => setPayEmail(e.target.value)} required />
+                <Button type="submit" disabled={paying} className="w-full bg-[#FF6200] hover:bg-[#e55a00] text-white font-semibold">
+                  {paying ? 'Recording…' : `I paid ${feeLabel} offline — unlock tracking`}
+                </Button>
+              </form>
+            </div>
+          )}
+
+          {!paymentRequired && feeLabel && (
+            <div className="mx-5 mt-4 rounded-lg border border-green-200 bg-green-50 px-4 py-3 text-sm">
+              <p className="font-semibold text-gray-900">Shipping charge {feeLabel} · Paid</p>
+              {result.packageSize && <p className="text-xs text-gray-600 mt-0.5">{result.packageSize}{result.service ? ` · ${result.service}` : ''}</p>}
+            </div>
+          )}
+
+          <div className="px-5 pt-5 pb-2">
+            <p className="text-xs text-gray-500 uppercase tracking-wide">Tracking ID</p>
+            <p className="font-mono text-lg font-semibold">{result.number}</p>
+            <p className="text-sm text-gray-600 mt-1">{result.status}</p>
+            {(result.origin || result.destination) && (
+              <p className="text-xs text-gray-500 mt-2 flex items-center gap-1">
+                <MapPin className="h-3.5 w-3.5" />
+                {result.origin} <ArrowRight className="h-3 w-3" /> {result.destination}
+              </p>
+            )}
+          </div>
+
+          <div className="px-5 py-4">
+            <ol className="relative border-l border-gray-200 ml-3 space-y-6">
+              {(result.events.length ? result.events : [{ date: '', time: '', location: result.origin || '', status: 'Label created', completed: !paymentRequired }]).map((ev, index) => {
+                const isActive = index === activeIndex;
+                const isDone = paymentRequired ? index === 0 : (ev.completed || index <= activeIndex);
+                return (
+                  <li key={index} className="ml-4">
+                    <span
+                      className={`absolute -left-1.5 mt-1.5 h-3 w-3 rounded-full border ${
+                        isDone ? (delivered && index === activeIndex ? 'bg-green-600 border-green-600' : 'bg-[#FF6200] border-[#FF6200]') : 'bg-white border-gray-300'
+                      }`}
+                    />
+                    <div>
+                      <p className={`text-sm font-medium ${isDone ? 'text-gray-900' : 'text-gray-400'}`}>{ev.status}</p>
+                      {(ev.location || ev.date) && (
+                        <p className="text-xs text-gray-500">{[ev.location, ev.date, ev.time].filter(Boolean).join(' · ')}</p>
+                      )}
+                      {isActive && index === 0 && paymentRequired && (
+                        <p className="text-xs text-[#FF6200] mt-2 font-medium">Pay shipping fee to continue tracking</p>
+                      )}
+                    </div>
+                  </li>
+                );
+              })}
+            </ol>
+
+            {!paymentRequired && (setupImage || transitImage || deliveredImage) && (
+              <div className="mt-6">
+                <button
+                  type="button"
+                  className="flex items-center gap-2 text-sm text-gray-800"
+                  onClick={() => setShowImages((v) => !v)}
+                >
+                  <ChevronDown className={`h-4 w-4 transition-transform ${showImages ? 'rotate-180' : ''}`} />
+                  <span className="underline">{showImages ? 'Hide package photo' : 'Show package photo'}</span>
+                </button>
+                {showImages && (
+                  <div className="mt-3 space-y-3">
+                    {setupImage && <img src={setupImage} alt="Package" className="w-full rounded-lg border" />}
+                    {transitImage && <img src={transitImage} alt="In transit" className="w-full rounded-lg border" />}
+                    {deliveredImage && <img src={deliveredImage} alt="Delivered" className="w-full rounded-lg border" />}
+                  </div>
+                )}
+              </div>
+            )}
+
+            {!paymentRequired && (
+              <button type="button" className="mt-6 text-sm underline text-gray-700" onClick={() => setShowHistory((v) => !v)}>
+                {showHistory ? 'Hide travel history' : 'Show travel history'}
+              </button>
+            )}
+            {showHistory && !paymentRequired && (
+              <ul className="mt-3 text-xs text-gray-600 space-y-2">
+                {result.events.map((ev, i) => (
+                  <li key={i}>
+                    <span className="font-medium text-gray-800">{ev.status}</span>
+                    {(ev.location || ev.date) && <> — {[ev.location, ev.date, ev.time].filter(Boolean).join(', ')}</>}
+                  </li>
+                ))}
+              </ul>
+            )}
+          </div>
+
+          <div className="fixed bottom-0 left-0 right-0 max-w-lg mx-auto bg-white border-t px-4 py-3 flex gap-2">
+            <Button asChild variant="outline" className="flex-1">
+              <Link to="/">Home</Link>
+            </Button>
+            <Button
+              type="button"
+              className="flex-1 bg-[#FF6200] hover:bg-[#e55a00] text-white"
+              onClick={() => {
+                setResult(null);
+                setQuery('');
+                setSearchParams({});
+              }}
+            >
+              Track another
+            </Button>
+          </div>
+        </div>
+      )}
+    </div>
+  );
 }
