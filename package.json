@@ -4,6 +4,9 @@
   "version": "1.0.2",
   "type": "module",
   "description": "FedEx-look full stack app",
+  "allowScripts": {
+    "esbuild": true
+  },
   "dependencies": {
     "pg": "^8.23.0"
   },
