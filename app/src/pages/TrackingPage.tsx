@@ -4,6 +4,7 @@ import { Search, ChevronDown, MapPin, Package } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { toast } from 'sonner';
+import { ImageLightbox } from '@/components/ImageLightbox';
 
 interface TrackingEvent {
   date: string;
@@ -79,6 +80,7 @@ export default function TrackingPage() {
   const [payName, setPayName] = useState('');
   const [payEmail, setPayEmail] = useState('');
   const [paying, setPaying] = useState(false);
+  const [previewIndex, setPreviewIndex] = useState<number | null>(null);
 
   async function runTrack(num?: string) {
     const number = (num || query).trim();
@@ -88,6 +90,7 @@ export default function TrackingPage() {
     setResult(null);
     setShowDetails(false);
     setPayOpen(false);
+    setPreviewIndex(null);
     try {
       const res = await fetch(`/api/track?number=${encodeURIComponent(number)}`);
       const trackJson = await res.json().catch(() => ({}));
@@ -351,12 +354,21 @@ export default function TrackingPage() {
                   </span>
                 </button>
                 {showImages && (
-                  <div className="mt-3 grid grid-cols-1 gap-3">
+                  <div className="mt-3 grid grid-cols-2 gap-2">
                     {photos.map((src, i) => (
-                      <div key={i}>
-                        <p className="text-xs font-medium text-gray-500 mb-1.5">Photo {i + 1}</p>
-                        <img src={src} alt={`Package ${i + 1}`} className="w-full rounded-xl border border-gray-100" />
-                      </div>
+                      <button
+                        key={i}
+                        type="button"
+                        className="text-left rounded-xl overflow-hidden border border-gray-100 focus:outline-none focus:ring-2 focus:ring-[#4D148C]/40"
+                        onClick={() => setPreviewIndex(i)}
+                      >
+                        <img
+                          src={src}
+                          alt={`Package ${i + 1}`}
+                          className="w-full h-28 object-cover"
+                        />
+                        <p className="text-[11px] text-gray-500 px-2 py-1 bg-gray-50">Photo {i + 1} · Tap to enlarge</p>
+                      </button>
                     ))}
                   </div>
                 )}
@@ -388,6 +400,16 @@ export default function TrackingPage() {
             </Button>
           </div>
         </div>
+      )}
+
+      {previewIndex != null && photos[previewIndex] && (
+        <ImageLightbox
+          images={photos}
+          index={previewIndex}
+          onClose={() => setPreviewIndex(null)}
+          onIndexChange={setPreviewIndex}
+          title="Package photo"
+        />
       )}
     </div>
   );

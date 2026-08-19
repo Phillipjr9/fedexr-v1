@@ -15,6 +15,7 @@ import {
   apiListImages,
   apiDeleteImage,
 } from '@/lib/adminApi';
+import { ImageLightbox } from '@/components/ImageLightbox';
 import { Pencil, ImageIcon, Trash2 } from 'lucide-react';
 
 async function compressImage(file: File, maxEdge = 1200, quality = 0.72): Promise<Blob> {
@@ -94,11 +95,13 @@ export default function AdminShipments() {
   const [uploading, setUploading] = useState(false);
   const [gallery, setGallery] = useState<GalleryImage[]>([]);
   const [galleryLoading, setGalleryLoading] = useState(false);
+  const [previewIndex, setPreviewIndex] = useState<number | null>(null);
 
   const serviceLabel = FEDEX_SERVICES.find((s) => s.id === serviceId)?.label || serviceId;
   const quoted = useMemo(() => quoteFee(packageSize, serviceLabel), [packageSize, serviceLabel]);
   const feeNum = manualFee.trim() ? Number(manualFee) : quoted;
   const photoCount = gallery.length;
+  const previewUrls = useMemo(() => gallery.map((g) => g.dataUrl), [gallery]);
 
   async function refresh() {
     setLoading(true);
@@ -152,6 +155,7 @@ export default function AdminShipments() {
     if (s.paymentInstructions) setPaymentInstructions(s.paymentInstructions);
     setEditMessage('');
     setGallery([]);
+    setPreviewIndex(null);
     refreshGallery(s.number);
   }
 
@@ -301,14 +305,16 @@ export default function AdminShipments() {
     }
   }
 
-  async function removePhoto(id: number) {
+  async function removePhoto(id: number, e?: React.MouseEvent) {
+    e?.stopPropagation();
     if (!editing) return;
     try {
       await apiDeleteImage(id);
       await refreshGallery(editing);
+      setPreviewIndex(null);
       toast.success('Photo removed');
-    } catch (e: any) {
-      toast.error(e.message || 'Could not delete');
+    } catch (err: any) {
+      toast.error(err.message || 'Could not delete');
     }
   }
 
@@ -441,7 +447,7 @@ export default function AdminShipments() {
               <div className="flex-1">
                 <p className="font-medium text-sm text-gray-900">Package photos (optional)</p>
                 <p className="text-xs text-gray-500">
-                  Upload one photo or many. Not required to save. Works before or after payment.
+                  Upload one or many. Click a thumbnail to preview full size.
                 </p>
                 {photoCount > 0 && (
                   <p className="mt-1 text-sm font-medium text-gray-700">{photoCount} photo{photoCount === 1 ? '' : 's'} on this shipment</p>
@@ -466,15 +472,24 @@ export default function AdminShipments() {
             {gallery.length > 0 && (
               <div className="grid grid-cols-2 sm:grid-cols-3 gap-3">
                 {gallery.map((img, idx) => (
-                  <div key={img.id} className="relative group border rounded-lg overflow-hidden bg-gray-50">
+                  <div
+                    key={img.id}
+                    className="relative group border rounded-lg overflow-hidden bg-gray-50 cursor-pointer"
+                    onClick={() => setPreviewIndex(idx)}
+                    role="button"
+                    tabIndex={0}
+                    onKeyDown={(e) => {
+                      if (e.key === 'Enter' || e.key === ' ') setPreviewIndex(idx);
+                    }}
+                  >
                     <img src={img.dataUrl} alt={`Package ${idx + 1}`} className="w-full h-28 object-cover" />
                     <div className="absolute inset-x-0 bottom-0 bg-black/50 text-white text-[10px] px-1.5 py-0.5 flex justify-between items-center">
-                      <span>#{idx + 1}</span>
+                      <span>#{idx + 1} · Preview</span>
                       <button
                         type="button"
                         className="p-0.5 hover:text-red-300"
                         title="Remove"
-                        onClick={() => removePhoto(img.id)}
+                        onClick={(e) => removePhoto(img.id, e)}
                       >
                         <Trash2 className="h-3.5 w-3.5" />
                       </button>
@@ -532,6 +547,16 @@ export default function AdminShipments() {
           {!loading && filtered.length === 0 && <li className="py-6 text-gray-500 text-center">No shipments match this search.</li>}
         </ul>
       </div>
+
+      {previewIndex != null && previewUrls[previewIndex] && (
+        <ImageLightbox
+          images={previewUrls}
+          index={previewIndex}
+          onClose={() => setPreviewIndex(null)}
+          onIndexChange={setPreviewIndex}
+          title="Package photo"
+        />
+      )}
     </div>
   );
 }
