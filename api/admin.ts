@@ -31,6 +31,7 @@ async function withDb(fn: (client: any) => Promise<any>) {
     await client.query('ALTER TABLE shipments ADD COLUMN IF NOT EXISTS package_size text');
     await client.query('ALTER TABLE users ADD COLUMN IF NOT EXISTS password_hash TEXT');
     await client.query('ALTER TABLE users ADD COLUMN IF NOT EXISTS disabled BOOLEAN DEFAULT false');
+    await client.query('ALTER TABLE users ADD COLUMN IF NOT EXISTS approved BOOLEAN DEFAULT false');
     await client.query(`CREATE TABLE IF NOT EXISTS site_banner (
       id INTEGER PRIMARY KEY DEFAULT 1, enabled BOOLEAN DEFAULT true, message TEXT, link_text TEXT, link_href TEXT,
       updated_at TIMESTAMPTZ DEFAULT now(), CONSTRAINT site_banner_singleton CHECK (id = 1)
@@ -70,7 +71,7 @@ export default async function handler(req: any, res: any) {
     const body = parseBody(req);
     req.body = body;
     const route = resourceOf(req, body);
-    const wantsLogin = route.includes('login') || (req.method === 'POST' && body.username && body.password && !body.number && !body.message && body.id == null);
+    const wantsLogin = route.includes('login') || (req.method === 'POST' && body.username && body.password && !body.number && !body.message && body.id == null && body.approved == null && body.disabled == null);
     if (wantsLogin) {
       if (req.method !== 'POST') return res.status(405).json({ error: 'Method not allowed' });
       const username = String(body.username || '').trim().toLowerCase();
@@ -79,7 +80,6 @@ export default async function handler(req: any, res: any) {
       return res.status(200).json({ ok: true, username, secret: password });
     }
 
-    // —— Banner (public GET) ——
     if (route.includes('banner')) {
       if (req.method === 'GET') {
         const banner = await withDb(async (c) => {
@@ -108,13 +108,19 @@ export default async function handler(req: any, res: any) {
       }
     }
 
-    // —— Users ——
     if (route.includes('users')) {
       if (!isAdmin(req)) return res.status(401).json({ error: 'Unauthorized' });
       if (req.method === 'GET') {
         const users = await withDb(async (c) => {
-          const r = await c.query('SELECT id, email, name, disabled, created_at FROM users ORDER BY id DESC LIMIT 500');
-          return r.rows;
+          const r = await c.query(
+            'SELECT id, email, name, disabled, approved, created_at FROM users ORDER BY approved ASC, id DESC LIMIT 500'
+          );
+          return r.rows.map((u: any) => ({
+            ...u,
+            approved: !!u.approved,
+            disabled: !!u.disabled,
+            status: u.disabled ? 'Disabled' : u.approved ? 'Approved' : 'Pending approval',
+          }));
         });
         return res.status(200).json({ users });
       }
@@ -122,8 +128,20 @@ export default async function handler(req: any, res: any) {
         const id = Number(body.id);
         if (!id) return res.status(400).json({ error: 'User id required' });
         await withDb(async (c) => {
-          await c.query('UPDATE users SET disabled = $2 WHERE id = $1', [id, !!body.disabled]);
-          await c.query('INSERT INTO admin_activity (action, detail) VALUES ($1, $2)', [body.disabled ? 'User disabled' : 'User enabled', String(id)]);
+          if (typeof body.approved === 'boolean') {
+            await c.query('UPDATE users SET approved = $2 WHERE id = $1', [id, body.approved]);
+            await c.query('INSERT INTO admin_activity (action, detail) VALUES ($1, $2)', [
+              body.approved ? 'User approved' : 'User approval revoked',
+              String(id),
+            ]);
+          }
+          if (typeof body.disabled === 'boolean') {
+            await c.query('UPDATE users SET disabled = $2 WHERE id = $1', [id, body.disabled]);
+            await c.query('INSERT INTO admin_activity (action, detail) VALUES ($1, $2)', [
+              body.disabled ? 'User disabled' : 'User enabled',
+              String(id),
+            ]);
+          }
         });
         return res.status(200).json({ ok: true });
       }
@@ -138,7 +156,6 @@ export default async function handler(req: any, res: any) {
       }
     }
 
-    // —— Activity ——
     if (route.includes('activity')) {
       if (!isAdmin(req)) return res.status(401).json({ error: 'Unauthorized' });
       if (req.method === 'GET') {
@@ -150,7 +167,6 @@ export default async function handler(req: any, res: any) {
       }
     }
 
-    // —— Locations ——
     if (route.includes('locations')) {
       if (req.method === 'GET') {
         const all = String(req.query?.all || '') === 'true';
@@ -188,7 +204,6 @@ export default async function handler(req: any, res: any) {
       }
     }
 
-    // —— Shipments list (public GET by number or admin list) ——
     if (req.method === 'GET') {
       const number = req.query?.number as string | undefined;
       const shipments = await withDb(async (c) => {
