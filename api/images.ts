@@ -1,10 +1,17 @@
 import { isAdmin, withDb } from './lib/db';
 
+function normalizeEvent(raw: any) {
+  const e = String(raw || 'setup').toLowerCase();
+  if (e === 'delivered') return 'delivered';
+  if (e === 'transit' || e === 'on_the_way' || e === 'ontheway' || e === 'in_transit') return 'transit';
+  return 'setup';
+}
+
 export default async function handler(req: any, res: any) {
   if (req.method === 'GET') {
     const trackingNumber = req.query?.number;
     if (!trackingNumber) return res.status(400).json({ error: 'Missing number' });
-    const event = req.query?.event === 'delivered' ? 'delivered' : 'setup';
+    const event = normalizeEvent(req.query?.event);
     try {
       const row = await withDb(async (c) => {
         const r = await c.query(
@@ -26,7 +33,7 @@ export default async function handler(req: any, res: any) {
     if (!isAdmin(req)) return res.status(401).json({ error: 'Unauthorized' });
     const { trackingNumber, dataUrl, eventType } = req.body || {};
     if (!trackingNumber || !dataUrl) return res.status(400).json({ error: 'Missing parameters' });
-    const type = eventType === 'delivered' ? 'delivered' : 'setup';
+    const type = normalizeEvent(eventType);
     const match = String(dataUrl).match(/^data:(.+);base64,(.+)$/);
     if (!match) return res.status(400).json({ error: 'Invalid dataUrl' });
     try {
