@@ -135,6 +135,15 @@ export async function apiSetUserDisabled(id: number, disabled: boolean) {
   await handleResponse(res, 'Could not update user');
 }
 
+export async function apiSetUserApproved(id: number, approved: boolean) {
+  const res = await fetch('/api/admin/users', {
+    method: 'POST',
+    headers: adminHeaders(),
+    body: JSON.stringify({ id, approved }),
+  });
+  await handleResponse(res, 'Could not update approval');
+}
+
 export async function apiDeleteUser(id: number) {
   const res = await fetch(`/api/admin/users?id=${id}`, {
     method: 'DELETE',
