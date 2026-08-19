@@ -25,6 +25,25 @@ const benefits = [
   },
 ];
 
+/** Try staff/admin login with the same fields used on /login */
+async function tryAdminLogin(username: string, password: string): Promise<boolean> {
+  try {
+    const res = await fetch('/api/admin?resource=login', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ resource: 'login', username, password }),
+    });
+    const json = await res.json().catch(() => ({}));
+    if (!res.ok || !json.ok) return false;
+    localStorage.setItem('isAdmin', 'true');
+    localStorage.setItem('adminUsername', json.username || username);
+    localStorage.setItem('adminPassword', json.secret || password);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
 export default function LoginPage() {
   const [isLogin, setIsLogin] = useState(true);
   const [showPassword, setShowPassword] = useState(false);
@@ -50,8 +69,39 @@ export default function LoginPage() {
     }
     setBusy(true);
     try {
-      const path = isLogin ? '/api/auth/login' : '/api/auth/register';
-      const res = await fetch(path, {
+      // —— Sign in: try admin first (same credentials as Vercel ADMIN_*), then customer ——
+      if (isLogin) {
+        const user = email.trim();
+        const adminOk = await tryAdminLogin(user, password);
+        if (adminOk) {
+          toast.success('Admin signed in');
+          navigate('/admin/shipments');
+          return;
+        }
+
+        const res = await fetch('/api/auth/login', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ email: user, password }),
+        });
+        const json = await res.json().catch(() => ({}));
+
+        if (!res.ok) {
+          if (json.pending) {
+            setPendingMessage(json.error);
+          }
+          toast.error(json.error || 'Could not sign in');
+          return;
+        }
+
+        sessionStorage.setItem('fx_user', JSON.stringify({ ...json.user, approved: true }));
+        toast.success('Signed in');
+        navigate(params.get('next') || '/dashboard');
+        return;
+      }
+
+      // —— Create account ——
+      const res = await fetch('/api/auth/register', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
@@ -62,7 +112,7 @@ export default function LoginPage() {
       });
       const json = await res.json().catch(() => ({}));
 
-      if (!isLogin && res.ok) {
+      if (res.ok) {
         sessionStorage.removeItem('fx_user');
         setPendingMessage(
           json.message ||
@@ -74,17 +124,7 @@ export default function LoginPage() {
         return;
       }
 
-      if (!res.ok) {
-        if (json.pending) {
-          setPendingMessage(json.error);
-        }
-        toast.error(json.error || 'Could not sign in');
-        return;
-      }
-
-      sessionStorage.setItem('fx_user', JSON.stringify({ ...json.user, approved: true }));
-      toast.success('Signed in');
-      navigate(params.get('next') || '/dashboard');
+      toast.error(json.error || 'Could not create account');
     } catch {
       toast.error('Could not reach the account service');
     } finally {
@@ -150,7 +190,7 @@ export default function LoginPage() {
               </h2>
               <p className="text-gray-600 mb-6">
                 {isLogin
-                  ? 'Sign in after an administrator has approved your account'
+                  ? 'Sign in with your approved account, or staff credentials to open the control panel'
                   : 'Request an account — admin approval is required before you can sign in'}
               </p>
 
@@ -188,14 +228,16 @@ export default function LoginPage() {
               )}
 
               <div className="mb-4">
-                <label className="block text-sm font-medium text-gray-700 mb-1">Email Address</label>
+                <label className="block text-sm font-medium text-gray-700 mb-1">
+                  {isLogin ? 'Email or staff username' : 'Email Address'}
+                </label>
                 <div className="relative">
                   <Mail className="absolute left-3 top-1/2 transform -translate-y-1/2 h-5 w-5 text-gray-400" />
                   <Input
                     name="login-email"
                     autoComplete="off"
-                    type="email"
-                    placeholder="Enter your email"
+                    type={isLogin ? 'text' : 'email'}
+                    placeholder={isLogin ? 'email@example.com or staff username' : 'Enter your email'}
                     value={email}
                     onChange={(e) => setEmail(e.target.value)}
                     className="pl-10"
@@ -264,11 +306,20 @@ export default function LoginPage() {
               </Button>
             </form>
 
-            <div className="mt-6 text-center">
+            <div className="mt-6 text-center space-y-2">
               <p className="text-sm text-gray-500">
                 Visitors can track packages without an account on the{' '}
                 <Link to="/tracking" className="text-fedex-link underline">tracking page</Link>.
               </p>
+              {isLogin && (
+                <p className="text-xs text-gray-400">
+                  Staff can also use{' '}
+                  <Link to="/admin" className="text-gray-500 underline hover:text-gray-700">
+                    /admin
+                  </Link>
+                  {' '}if preferred.
+                </p>
+              )}
             </div>
           </motion.div>
         </div>
