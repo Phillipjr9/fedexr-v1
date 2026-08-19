@@ -1,7 +1,16 @@
 import { Client } from 'pg';
 
 export function dbUrl() {
-  return process.env.NEON_DATABASE_URL || process.env.DATABASE_URL || process.env.POSTGRES_URL || '';
+  return (
+    process.env.DATABASE_URL ||
+    process.env.NEON_DATABASE_URL ||
+    process.env.POSTGRES_URL ||
+    process.env.POSTGRES_PRISMA_URL ||
+    process.env.fedex_DATABASE_URL ||
+    process.env.fedex_POSTGRES_URL ||
+    process.env.fedex_POSTGRES_PRISMA_URL ||
+    ''
+  );
 }
 
 export async function withDb<T>(fn: (client: Client) => Promise<T>): Promise<T> {
@@ -25,17 +34,11 @@ export function adminPassword() {
 }
 
 export function isAdminUser(username: string, password: string) {
-  const expectedUser = adminUsername().toLowerCase();
-  const expectedPass = adminPassword();
-  const user = String(username || '').trim().toLowerCase();
-  const pass = String(password || '');
-  if (!user || !pass) return false;
-  return user === expectedUser && pass === expectedPass;
+  return String(username || '').trim().toLowerCase() === adminUsername().toLowerCase() && String(password || '') === adminPassword();
 }
 
 export function isAdmin(req: { headers?: Record<string, string | string[] | undefined> }) {
   const expectedPass = adminPassword();
-  if (!expectedPass) return false;
   const header = req.headers?.['x-admin-secret'] || req.headers?.['X-Admin-Secret'];
   const value = Array.isArray(header) ? header[0] : header;
   return String(value || '') === expectedPass;
