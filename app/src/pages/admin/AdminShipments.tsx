@@ -9,7 +9,6 @@ import { PACKAGE_SIZES, formatFee, quoteFee } from '@/lib/shippingRates';
 import { apiAddEvent, apiDeleteShipment, apiListShipments, apiSaveShipment, apiUploadImage, apiMarkPaid, type ImageEventType } from '@/lib/adminApi';
 import { Pencil } from 'lucide-react';
 
-/** Compress image client-side before upload (max edge 1200px, JPEG quality 0.72). */
 async function compressImage(file: File, maxEdge = 1200, quality = 0.72): Promise<Blob> {
   if (!file.type.startsWith('image/')) return file;
   const bitmap = await createImageBitmap(file);
@@ -152,20 +151,22 @@ export default function AdminShipments() {
         destination: destination.trim(),
         service,
         serviceId,
+        location: origin.trim(),
         currentLocation: origin.trim(),
+        estimatedDelivery: '',
         estimatedDeliveryText: '',
         shippingFee: Number.isFinite(feeNum) ? feeNum : quoted,
         packageSize,
         collectPayment: collectPayment ? 'true' : 'false',
         paymentInstructions: collectPayment ? paymentInstructions : '',
-      });
+      } as any);
       const chosen = routeStops.filter((_, i) => selectedStops[i]);
       for (const stop of chosen.slice(1, -1)) {
         await apiAddEvent({
           number,
           status: 'In transit',
           location: stop.name || stop.label || '',
-          message: `Departed facility`,
+          details: 'Departed facility',
         });
       }
       toast.success(`Created ${number}`);
@@ -190,19 +191,21 @@ export default function AdminShipments() {
         destination: destination.trim(),
         service,
         serviceId,
+        location: editLocation.trim() || origin.trim(),
         currentLocation: editLocation.trim() || origin.trim(),
+        estimatedDelivery: '',
         estimatedDeliveryText: '',
         shippingFee: Number.isFinite(feeNum) ? feeNum : quoted,
         packageSize,
         collectPayment: collectPayment ? 'true' : 'false',
         paymentInstructions: collectPayment ? paymentInstructions : '',
-      });
+      } as any);
       if (editMessage.trim() || editStatus) {
         await apiAddEvent({
           number: editing,
           status: editStatus,
           location: editLocation.trim() || origin.trim(),
-          message: editMessage.trim() || editStatus,
+          details: editMessage.trim() || editStatus,
         });
       }
       toast.success('Saved');
@@ -220,7 +223,7 @@ export default function AdminShipments() {
     setUploading(true);
     try {
       const blob = await compressImage(file);
-      await apiUploadImage(editing, blob, photoKind);
+      await apiUploadImage(editing, blob as any, photoKind);
       toast.success('Photo uploaded');
     } catch (err: any) {
       toast.error(err.message || 'Upload failed');
@@ -310,7 +313,7 @@ export default function AdminShipments() {
               <label key={i} className="flex items-center gap-2 cursor-pointer">
                 <input type="checkbox" checked={!!selectedStops[i]} onChange={(e) => setSelectedStops((prev) => ({ ...prev, [i]: e.target.checked }))} />
                 <span className="font-mono text-xs text-gray-400">{i + 1}</span>
-                <span>{stop.name || stop.label || `${stop.lat?.toFixed?.(3)}, ${stop.lon?.toFixed?.(3)}`}</span>
+                <span>{stop.name || stop.label || `${stop.lat}, ${stop.lon}`}</span>
               </label>
             ))}
           </div>
