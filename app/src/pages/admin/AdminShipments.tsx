@@ -14,7 +14,6 @@ import {
   apiMarkPaid,
   apiListImages,
   apiDeleteImage,
-  MIN_PACKAGE_PHOTOS,
 } from '@/lib/adminApi';
 import { Pencil, ImageIcon, Trash2 } from 'lucide-react';
 
@@ -100,7 +99,6 @@ export default function AdminShipments() {
   const quoted = useMemo(() => quoteFee(packageSize, serviceLabel), [packageSize, serviceLabel]);
   const feeNum = manualFee.trim() ? Number(manualFee) : quoted;
   const photoCount = gallery.length;
-  const photosOk = photoCount >= MIN_PACKAGE_PHOTOS;
 
   async function refresh() {
     setLoading(true);
@@ -215,7 +213,7 @@ export default function AdminShipments() {
           details: 'Departed facility',
         });
       }
-      toast.success(`Created ${number} — upload at least ${MIN_PACKAGE_PHOTOS} package photos below`);
+      toast.success(`Created ${number} — you can upload package photos below (optional)`);
       setEditing(number);
       setGallery([]);
       await refresh();
@@ -228,10 +226,6 @@ export default function AdminShipments() {
 
   async function saveEdit() {
     if (!editing) return;
-    if (!photosOk) {
-      toast.error(`Upload at least ${MIN_PACKAGE_PHOTOS} package photos (${photoCount}/${MIN_PACKAGE_PHOTOS})`);
-      return;
-    }
     setSaving(true);
     try {
       const service = FEDEX_SERVICES.find((s) => s.id === serviceId)?.label || serviceId;
@@ -298,12 +292,7 @@ export default function AdminShipments() {
       }
       await refreshGallery(editing);
       if (ok) {
-        const meets = lastCount >= MIN_PACKAGE_PHOTOS;
-        toast.success(
-          meets
-            ? `Uploaded ${ok} photo(s). Total ${lastCount} — minimum met.`
-            : `Uploaded ${ok} photo(s). ${lastCount}/${MIN_PACKAGE_PHOTOS} — add ${MIN_PACKAGE_PHOTOS - lastCount} more.`
-        );
+        toast.success(`Uploaded ${ok} photo(s). Total on this shipment: ${lastCount}.`);
       }
       await refresh();
     } finally {
@@ -341,7 +330,7 @@ export default function AdminShipments() {
       <div>
         <h1 className="text-xl font-semibold text-gray-900">Shipments</h1>
         <p className="text-sm text-gray-500">
-          Create labels, set fees, and upload at least {MIN_PACKAGE_PHOTOS} package photos (before or after payment).
+          Create labels, set fees, and optionally upload package photos (1 or many, before or after payment).
         </p>
       </div>
 
@@ -450,13 +439,13 @@ export default function AdminShipments() {
             <div className="flex items-start gap-2">
               <ImageIcon className="h-5 w-5 text-[#4D148C] mt-0.5 shrink-0" />
               <div className="flex-1">
-                <p className="font-medium text-sm text-gray-900">Package photos (required)</p>
+                <p className="font-medium text-sm text-gray-900">Package photos (optional)</p>
                 <p className="text-xs text-gray-500">
-                  Upload at least {MIN_PACKAGE_PHOTOS} photos. You can add more anytime — before or after payment.
+                  Upload one photo or many. Not required to save. Works before or after payment.
                 </p>
-                <p className={`mt-1 text-sm font-semibold ${photosOk ? 'text-green-700' : 'text-amber-700'}`}>
-                  {photoCount}/{MIN_PACKAGE_PHOTOS} minimum{photosOk ? ' · Ready' : ` · ${Math.max(0, MIN_PACKAGE_PHOTOS - photoCount)} more needed`}
-                </p>
+                {photoCount > 0 && (
+                  <p className="mt-1 text-sm font-medium text-gray-700">{photoCount} photo{photoCount === 1 ? '' : 's'} on this shipment</p>
+                )}
               </div>
             </div>
 
@@ -469,7 +458,7 @@ export default function AdminShipments() {
                 onChange={onUploadMany}
                 disabled={uploading}
               />
-              {uploading ? 'Uploading…' : 'Choose photos (select multiple)'}
+              {uploading ? 'Uploading…' : 'Choose photo(s)'}
             </label>
 
             {galleryLoading && <p className="text-xs text-gray-400">Loading photos…</p>}
@@ -496,9 +485,7 @@ export default function AdminShipments() {
             )}
 
             {!galleryLoading && gallery.length === 0 && (
-              <p className="text-xs text-amber-700 bg-amber-50 border border-amber-100 rounded-lg px-3 py-2">
-                No photos yet. Select multiple images (5 or more) to meet the requirement.
-              </p>
+              <p className="text-xs text-gray-500">No photos yet. You can add one or more anytime.</p>
             )}
           </div>
         </div>
