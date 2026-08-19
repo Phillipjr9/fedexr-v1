@@ -1,5 +1,15 @@
 const UA = { 'User-Agent': 'fedexr-v1-tracking/1.0', Accept: 'application/json' };
 
+type OsrmRoute = {
+  distance?: number;
+  duration?: number;
+  geometry?: { coordinates?: number[][] };
+};
+
+type OsrmResponse = {
+  routes?: OsrmRoute[];
+};
+
 function fullAddress(hit: any) {
   const a = hit.address || {};
   const line1 = [a.house_number, a.road || a.pedestrian || a.highway].filter(Boolean).join(' ');
@@ -66,11 +76,11 @@ async function buildRoute(fromQ: string, toQ: string) {
   const osrm = `https://router.project-osrm.org/route/v1/driving/${from.lon},${from.lat};${to.lon},${to.lat}?overview=simplified&geometries=geojson`;
   const routeRes = await fetch(osrm);
   if (!routeRes.ok) return { from, to, stops: [from, to], miles: 0, minutes: 0 };
-  const routeJson = await routeRes.json();
+  const routeJson = (await routeRes.json()) as OsrmResponse;
   const route = routeJson.routes?.[0];
   const coords: number[][] = route?.geometry?.coordinates || [];
   const samples = sampleCoords(coords, 6);
-  const stops = [];
+  const stops: ReturnType<typeof fullAddress>[] = [];
   const seen = new Set<string>();
   for (const [lon, lat] of samples) {
     const place = await reverse(lat, lon);
