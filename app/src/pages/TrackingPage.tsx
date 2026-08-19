@@ -38,7 +38,6 @@ function formatFee(n: number) {
   return new Intl.NumberFormat('en-US', { style: 'currency', currency: 'USD' }).format(n);
 }
 
-/** Map status → which milestone is active (0=FROM/Label Created … 4=TO/Delivered) */
 function stageFromStatus(status: string, paymentRequired: boolean): number {
   if (paymentRequired) return 0;
   const s = (status || '').toLowerCase();
@@ -46,7 +45,7 @@ function stageFromStatus(status: string, paymentRequired: boolean): number {
   if (/out for/.test(s)) return 3;
   if (/transit|facility|on the way|in transit|departed|arrived/.test(s)) return 2;
   if (/picked|we have|pickup|received/.test(s)) return 1;
-  return 0; // Label created
+  return 0;
 }
 
 function firstEventDate(events: TrackingEvent[]): string {
@@ -78,8 +77,11 @@ export default function TrackingPage() {
     try {
       const res = await fetch(`/api/track?number=${encodeURIComponent(number)}`);
       const trackJson = await res.json().catch(() => ({}));
-      if (!res.ok) throw new Error(trackJson.error || 'Tracking not found');
+      if (!res.ok || trackJson.found === false) {
+        throw new Error(trackJson.error || 'Tracking not found. Create the label in Admin → Shipments first.');
+      }
       const shipment = trackJson.shipment || trackJson;
+      const rawEvents = trackJson.events || trackJson.history || shipment.events || shipment.history || [];
       setResult({
         number: shipment.number || number,
         status: shipment.status || 'Label created',
@@ -87,20 +89,20 @@ export default function TrackingPage() {
         destination: shipment.destination || '',
         service: shipment.service || '',
         estimatedDelivery: shipment.estimatedDelivery || shipment.estimated_delivery_text || '',
-        currentLocation: shipment.currentLocation || shipment.current_location || '',
+        currentLocation: shipment.currentLocation || shipment.current_location || shipment.location || '',
         shippingFee: shipment.shippingFee ?? shipment.shipping_fee ?? null,
         packageSize: shipment.packageSize || shipment.package_size || '',
-        feePaid: !!shipment.feePaid || !!shipment.fee_paid,
-        collectPayment: !!shipment.collectPayment || !!shipment.collect_payment,
-        paymentRequired: !!trackJson.paymentRequired || !!shipment.paymentRequired,
+        feePaid: !!(shipment.feePaid ?? shipment.fee_paid),
+        collectPayment: !!(shipment.collectPayment ?? shipment.collect_payment),
+        paymentRequired: !!(trackJson.paymentRequired ?? shipment.paymentRequired),
         paymentInstructions: trackJson.paymentInstructions || shipment.paymentInstructions || '',
-        events: (trackJson.events || shipment.events || []).map((ev: any) => ({
+        events: (Array.isArray(rawEvents) ? rawEvents : []).map((ev: any) => ({
           date: ev.date || '',
           time: ev.time || '',
           location: ev.location || '',
           status: ev.status || ev.message || '',
-          completed: !!ev.completed,
-          detail: ev.detail || ev.message || '',
+          completed: ev.completed !== false,
+          detail: ev.detail || ev.details || ev.message || '',
         })),
         setupImage: trackJson.setupImage || shipment.setupImage || null,
         transitImage: trackJson.transitImage || shipment.transitImage || null,
@@ -162,7 +164,6 @@ export default function TrackingPage() {
 
   return (
     <div className="min-h-screen bg-white text-gray-900">
-      {/* Search (no result yet) */}
       {!result && (
         <section className="max-w-lg mx-auto px-4 pt-24 pb-16">
           <div className="bg-white rounded-xl shadow-sm border p-6 space-y-4">
@@ -191,7 +192,6 @@ export default function TrackingPage() {
 
       {result && (
         <div className="max-w-lg mx-auto bg-white min-h-screen pb-28 pt-4">
-          {/* Payment banner — only when admin enabled collect_payment */}
           {paymentRequired && feeLabel && (
             <div className="mx-5 mb-4 rounded-xl border-2 border-[#FF6200] bg-orange-50 px-4 py-4 text-sm space-y-3">
               <div>
@@ -230,18 +230,11 @@ export default function TrackingPage() {
             </div>
           )}
 
-          {/* ——— FedEx-style progress timeline (matches reference screenshot) ——— */}
           <div className="px-5 pt-2 pb-6">
             <div className="relative pl-14">
-              {/* Vertical connector line */}
-              <div
-                className="absolute left-[22px] top-10 bottom-4 w-[3px] rounded-full bg-gray-200"
-                aria-hidden
-              />
+              <div className="absolute left-[22px] top-10 bottom-4 w-[3px] rounded-full bg-gray-200" aria-hidden />
 
-              {/* Stage 0 — FROM / Label Created (active pin) */}
               <div className="relative mb-8">
-                {/* Pin with soft halo */}
                 <div className="absolute -left-14 top-0 flex h-12 w-12 items-center justify-center">
                   <span className="absolute h-12 w-12 rounded-full bg-[#4D148C]/15" />
                   <span className="relative flex h-10 w-10 items-center justify-center rounded-full bg-[#4D148C] shadow-sm">
@@ -249,26 +242,17 @@ export default function TrackingPage() {
                   </span>
                 </div>
 
-                {/* FROM card */}
                 <div className="rounded-2xl bg-[#F3F3F5] px-4 py-3.5">
                   <p className="text-[11px] font-bold uppercase tracking-wide text-gray-900">From</p>
                   <p className="text-[15px] font-semibold text-gray-900 leading-snug mt-0.5">
                     {result.origin || '—'}
                   </p>
                   <p className="mt-2 text-[14px] italic text-gray-700">Label Created</p>
-                  {labelDate && (
-                    <p className="text-[13px] text-gray-600 mt-0.5">{labelDate}</p>
-                  )}
+                  {labelDate && <p className="text-[13px] text-gray-600 mt-0.5">{labelDate}</p>}
                   {paymentRequired && feeLabel ? (
-                    <p className="mt-2 text-[13px] font-medium text-[#FF6200]">
-                      Pay {feeLabel} to continue tracking
-                    </p>
+                    <p className="mt-2 text-[13px] font-medium text-[#FF6200]">Pay {feeLabel} to continue tracking</p>
                   ) : (
-                    <button
-                      type="button"
-                      onClick={() => setShowDetails((v) => !v)}
-                      className="mt-2 text-[13px] text-gray-900 underline underline-offset-2"
-                    >
+                    <button type="button" onClick={() => setShowDetails((v) => !v)} className="mt-2 text-[13px] text-gray-900 underline underline-offset-2">
                       {showDetails ? 'Hide details' : 'View more details'}
                     </button>
                   )}
@@ -283,65 +267,24 @@ export default function TrackingPage() {
                 </div>
               </div>
 
-              {/* Stage 1 — WE HAVE YOUR PACKAGE */}
-              <Milestone
-                label="WE HAVE YOUR PACKAGE"
-                active={stage >= 1}
-                done={stage > 1}
-              />
+              <Milestone label="WE HAVE YOUR PACKAGE" active={stage >= 1} done={stage > 1} />
+              <Milestone label="ON THE WAY" active={stage >= 2} done={stage > 2} />
+              <Milestone label="OUT FOR DELIVERY" active={stage >= 3} done={stage > 3} />
 
-              {/* Stage 2 — ON THE WAY */}
-              <Milestone
-                label="ON THE WAY"
-                active={stage >= 2}
-                done={stage > 2}
-              />
-
-              {/* Stage 3 — OUT FOR DELIVERY */}
-              <Milestone
-                label="OUT FOR DELIVERY"
-                active={stage >= 3}
-                done={stage > 3}
-              />
-
-              {/* Stage 4 — TO / destination */}
               <div className="relative pb-2">
                 <div className="absolute -left-14 top-1 flex h-5 w-5 items-center justify-center">
-                  <span
-                    className={`h-3 w-3 rounded-full ${
-                      delivered
-                        ? 'bg-green-600'
-                        : stage >= 4
-                          ? 'bg-[#4D148C]'
-                          : 'bg-gray-300'
-                    }`}
-                  />
+                  <span className={`h-3 w-3 rounded-full ${delivered ? 'bg-green-600' : stage >= 4 ? 'bg-[#4D148C]' : 'bg-gray-300'}`} />
                 </div>
-                <p
-                  className={`text-[13px] font-bold uppercase tracking-wide ${
-                    delivered ? 'text-green-700' : stage >= 4 ? 'text-gray-900' : 'text-gray-400'
-                  }`}
-                >
-                  To
-                </p>
-                <p
-                  className={`text-[14px] mt-0.5 ${
-                    delivered ? 'text-green-700 font-semibold' : stage >= 4 ? 'text-gray-800' : 'text-gray-400'
-                  }`}
-                >
+                <p className={`text-[13px] font-bold uppercase tracking-wide ${delivered ? 'text-green-700' : stage >= 4 ? 'text-gray-900' : 'text-gray-400'}`}>To</p>
+                <p className={`text-[14px] mt-0.5 ${delivered ? 'text-green-700 font-semibold' : stage >= 4 ? 'text-gray-800' : 'text-gray-400'}`}>
                   {result.destination || '—'}
                 </p>
               </div>
             </div>
 
-            {/* Package photos (hidden until toggle; only after payment unlocked) */}
             {!paymentRequired && (setupImage || transitImage || deliveredImage) && (
               <div className="mt-8">
-                <button
-                  type="button"
-                  className="flex items-center gap-2 text-sm text-gray-800"
-                  onClick={() => setShowImages((v) => !v)}
-                >
+                <button type="button" className="flex items-center gap-2 text-sm text-gray-800" onClick={() => setShowImages((v) => !v)}>
                   <ChevronDown className={`h-4 w-4 transition-transform ${showImages ? 'rotate-180' : ''}`} />
                   <span className="underline">{showImages ? 'Hide package photo' : 'Show package photo'}</span>
                 </button>
@@ -384,32 +327,13 @@ export default function TrackingPage() {
   );
 }
 
-/** Grey milestone row under the FROM card */
-function Milestone({
-  label,
-  active,
-  done,
-}: {
-  label: string;
-  active: boolean;
-  done: boolean;
-}) {
+function Milestone({ label, active, done }: { label: string; active: boolean; done: boolean }) {
   return (
     <div className="relative mb-8">
       <div className="absolute -left-14 top-1 flex h-5 w-5 items-center justify-center">
-        <span
-          className={`h-3 w-3 rounded-full ${
-            done || active ? 'bg-[#4D148C]' : 'bg-gray-300'
-          }`}
-        />
+        <span className={`h-3 w-3 rounded-full ${done || active ? 'bg-[#4D148C]' : 'bg-gray-300'}`} />
       </div>
-      <p
-        className={`text-[13px] font-bold uppercase tracking-wide ${
-          done || active ? 'text-gray-800' : 'text-gray-400'
-        }`}
-      >
-        {label}
-      </p>
+      <p className={`text-[13px] font-bold uppercase tracking-wide ${done || active ? 'text-gray-800' : 'text-gray-400'}`}>{label}</p>
     </div>
   );
 }
