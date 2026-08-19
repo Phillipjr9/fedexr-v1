@@ -80,8 +80,9 @@ export default function AdminShipments() {
   const [photoKind, setPhotoKind] = useState<ImageEventType>('setup');
   const [busy, setBusy] = useState(false);
   const [shipments, setShipments] = useState<any[]>([]);
-  const [route, setRoute] = useState<{ stops: Place[]; miles?: number } | null>(null);
+  const [route, setRoute] = useState<{ stops: Place[]; miles?: number; minutes?: number; from?: Place; to?: Place } | null>(null);
   const [pin, setPin] = useState('');
+  const [selectedStops, setSelectedStops] = useState<string[]>([]);
   const [routing, setRouting] = useState(false);
   const [holdReason, setHoldReason] = useState(HOLD_REASON_LABELS[0]);
   const [holdOther, setHoldOther] = useState('');
@@ -97,29 +98,52 @@ export default function AdminShipments() {
   const fee = manualFee.trim() === '' ? quoted : Number(manualFee);
 
   useEffect(() => {
-    if (origin.length < 8 || destination.length < 8) { setRoute(null); return; }
-    const t = setTimeout(async () => {
+    if (origin.length < 5 || destination.length < 5) { setRoute(null); setSelectedStops([]); return; }
+    const timer = setTimeout(async () => {
       setRouting(true);
       try {
         const data = await fetchRoute(origin, destination);
         setRoute(data);
-        if (data.stops?.length && !pin) setPin(data.stops[Math.floor(data.stops.length / 2)]?.display || data.stops[0]?.label);
-      } catch { setRoute(null); }
-      finally { setRouting(false); }
+        const labels = (data.stops || []).map((s) => s.display || s.label || s.short || s.city || '').filter(Boolean);
+        setSelectedStops(labels);
+        if (labels.length) {
+          const mid = labels[Math.floor(labels.length / 2)];
+          setPin((prev) => (prev && labels.includes(prev) ? prev : mid));
+        }
+      } catch {
+        setRoute(null);
+        setSelectedStops([]);
+      } finally {
+        setRouting(false);
+      }
     }, 500);
-    return () => clearTimeout(t);
+    return () => clearTimeout(timer);
   }, [origin, destination]);
+
+  const pathStops = useMemo(() => {
+    const ordered = (route?.stops || []).map((s) => s.display || s.label || '').filter(Boolean);
+    const mids = ordered.filter((lab) => selectedStops.includes(lab));
+    const path: string[] = [];
+    if (origin) path.push(origin);
+    for (const lab of mids) {
+      if (lab !== origin && lab !== destination && !path.includes(lab)) path.push(lab);
+    }
+    if (destination && !path.includes(destination)) path.push(destination);
+    return path;
+  }, [route, selectedStops, origin, destination]);
 
   const story = useMemo(() => {
     if (!origin || !destination) return [];
-    const stops = (route?.stops || []).map((s) => s.display || s.label);
-    const mid = pin || stops[Math.floor(stops.length / 2)] || origin;
+    const mid = (pin && pathStops.includes(pin) ? pin : null) || pathStops[Math.floor(pathStops.length / 2)] || origin;
     const out: { status: string; location: string; details: string }[] = [
       { status: 'Label created', location: origin, details: 'Shipping label created' },
     ];
     if (scene.rank >= 1) out.push({ status: 'Picked up', location: origin, details: 'We have your package' });
     if (scene.rank >= 2) {
-      stops.slice(1, -1).forEach((stop) => out.push({ status: 'In transit', location: stop, details: 'On the driving route' }));
+      pathStops.slice(1, -1).forEach((stop) => {
+        if (stop === mid && scene.id === 'hold') return;
+        out.push({ status: 'In transit', location: stop, details: 'On the way' });
+      });
       out.push({
         status: scene.id === 'hold' ? 'Held at location' : 'In transit',
         location: mid,
@@ -129,7 +153,7 @@ export default function AdminShipments() {
     if (scene.rank >= 3 && scene.id !== 'hold') out.push({ status: 'Out for delivery', location: destination, details: 'On a local truck' });
     if (scene.rank >= 4 && scene.id !== 'hold') out.push({ status: 'Delivered', location: destination, details: 'Delivered' });
     return out;
-  }, [origin, destination, scene, route, pin, reasonText]);
+  }, [origin, destination, scene, pathStops, pin, reasonText]);
 
   const filtered = useMemo(() => {
     const q = query.trim().toLowerCase();
@@ -189,6 +213,9 @@ export default function AdminShipments() {
     setEditDetails('');
     setScene(SCENES[2]);
     setManualFee('');
+    setSelectedStops([]);
+    setRoute(null);
+    setPin('');
     setParams({});
   };
 
@@ -285,7 +312,7 @@ export default function AdminShipments() {
           <p className="text-sm text-gray-500">
             {editing
               ? 'Change status, location, fee, or add a package photo anytime — including while it is on the way.'
-              : 'Size sets the rate. Override the fee if you need to.'}
+              : 'Pick From and To, then choose which cities on the calculated path belong on this package.'}
           </p>
         </div>
         <div className="text-right">
@@ -354,17 +381,71 @@ export default function AdminShipments() {
               <button key={s.id} type="button" onClick={() => setScene(s)} className={`rounded-xl border p-3 text-left text-sm font-semibold ${scene.id === s.id ? 'border-[#4D148C] bg-purple-50' : 'bg-white'}`}>{s.label}</button>
             ))}
           </div>
-          <div className="bg-white border rounded-xl p-5">
-            <p className="text-sm font-medium mb-2">Route stops {routing ? '(calculating…)' : route?.miles ? `· ${route.miles} mi` : ''}</p>
-            <div className="flex flex-wrap gap-2">
-              {(route?.stops || []).map((s) => {
+
+          <div className="bg-white border rounded-xl p-5 space-y-3">
+            <div className="flex flex-wrap items-center justify-between gap-2">
+              <p className="text-sm font-medium">
+                Route places (From → path → To)
+                {routing ? ' · calculating…' : route?.miles ? ` · ${route.miles} mi · ~${route.minutes ?? '?'} min` : ''}
+              </p>
+              {(route?.stops || []).length > 0 && (
+                <div className="flex gap-2 text-xs">
+                  <button type="button" className="underline text-[#4D148C]" onClick={() => setSelectedStops((route?.stops || []).map((s) => s.display || s.label).filter(Boolean))}>Select all</button>
+                  <button type="button" className="underline text-gray-500" onClick={() => setSelectedStops([])}>Clear path</button>
+                </div>
+              )}
+            </div>
+            <p className="text-xs text-gray-500">
+              Check every city you want on this shipment’s path. Use <strong>Set pin</strong> for the current location on the story.
+            </p>
+            {!routing && !(route?.stops || []).length && origin && destination && (
+              <p className="text-sm text-amber-700">No route yet — try clearer From/To addresses (city + state).</p>
+            )}
+            <ol className="space-y-2">
+              {(route?.stops || []).map((s, idx) => {
                 const label = s.display || s.label;
+                const short = s.short || s.city || label;
+                const checked = selectedStops.includes(label);
+                const isPin = pin === label;
+                const endLabel = idx === 0 ? 'FROM' : idx === (route?.stops || []).length - 1 ? 'TO' : `STOP ${idx}`;
                 return (
-                  <button key={label} type="button" onClick={() => { setPin(label); setScene(SCENES.find((x) => x.id === 'hold')!); }} className={`text-left text-xs border rounded-lg px-3 py-2 max-w-xs ${pin === label ? 'border-[#4D148C] bg-purple-50' : 'bg-gray-50'}`}>{label}</button>
+                  <li key={`${label}-${idx}`} className={`flex flex-wrap items-center gap-2 rounded-lg border px-3 py-2 text-sm ${isPin ? 'border-[#4D148C] bg-purple-50' : 'bg-gray-50'}`}>
+                    <label className="flex items-center gap-2 flex-1 min-w-0 cursor-pointer">
+                      <input
+                        type="checkbox"
+                        checked={checked}
+                        onChange={() => {
+                          setSelectedStops((prev) =>
+                            prev.includes(label) ? prev.filter((x) => x !== label) : [...prev, label]
+                          );
+                        }}
+                      />
+                      <span className="truncate">
+                        <span className="text-xs text-gray-400 mr-1">{endLabel}</span>
+                        {short}
+                      </span>
+                    </label>
+                    <button
+                      type="button"
+                      className={`text-xs font-semibold px-2 py-1 rounded border ${isPin ? 'bg-[#4D148C] text-white border-[#4D148C]' : 'bg-white text-gray-700'}`}
+                      onClick={() => {
+                        setPin(label);
+                        if (!selectedStops.includes(label)) setSelectedStops((prev) => [...prev, label]);
+                      }}
+                    >
+                      {isPin ? 'Current pin' : 'Set pin'}
+                    </button>
+                  </li>
                 );
               })}
-            </div>
+            </ol>
+            {pathStops.length > 0 && (
+              <p className="text-xs text-gray-600 border-t pt-2">
+                Active path: {pathStops.join(' → ')}
+              </p>
+            )}
           </div>
+
           {scene.id === 'hold' && (
             <div className="bg-amber-50 border border-amber-200 rounded-xl p-5 space-y-3">
               <select className="w-full border rounded h-10 px-2 bg-white" value={holdReason} onChange={(e) => setHoldReason(e.target.value)}>
