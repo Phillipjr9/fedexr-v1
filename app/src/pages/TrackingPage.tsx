@@ -1,23 +1,19 @@
 import { useEffect, useMemo, useState } from 'react';
 import { Link, useSearchParams } from 'react-router-dom';
-import { motion } from 'framer-motion';
 import {
   Search,
+  Pencil,
+  Star,
   MapPin,
-  Clock,
-  CheckCircle,
+  ArrowRight,
+  Check,
+  ChevronDown,
+  MessageCircle,
   Barcode,
-  QrCode,
-  Package,
-  Truck,
-  Copy,
-  Bell,
-  Shield,
 } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { toast } from 'sonner';
-import FadeInOnScroll from '@/components/animations/FadeInOnScroll';
 
 interface TrackingEvent {
   date: string;
@@ -28,56 +24,56 @@ interface TrackingEvent {
   details?: string;
 }
 
-const STEPS = ['Picked up', 'In transit', 'Out for delivery', 'Delivered'] as const;
-
-function stepIndex(status: string) {
-  const s = status.toLowerCase();
-  if (s.includes('deliver')) return 3;
-  if (s.includes('out for')) return 2;
-  if (s.includes('hold') || s.includes('exception')) return 1;
-  if (s.includes('pick') || s.includes('label')) return 0;
-  return 1;
+interface TrackResult {
+  number: string;
+  status: string;
+  estimatedDelivery: string;
+  origin?: string;
+  destination?: string;
+  service?: string;
+  location?: string;
+  history: TrackingEvent[];
 }
 
-const trackingFeatures = [
-  {
-    icon: Bell,
-    title: 'Delivery notifications',
-    description: 'Get alerts when your package moves, is out for delivery, or arrives.',
-  },
-  {
-    icon: MapPin,
-    title: 'Scan location',
-    description: 'See the latest facility or city from each scan on the shipment.',
-  },
-  {
-    icon: Clock,
-    title: 'Estimated delivery',
-    description: 'The date your shipper or admin set for this tracking number.',
-  },
-  {
-    icon: Shield,
-    title: 'Delivery photo',
-    description: 'If a delivered photo was uploaded, it appears only after delivery.',
-  },
-];
+/** FedEx milestone order from real app */
+const MILESTONES = [
+  { key: 'from', title: 'FROM', activeIcon: 'pin' },
+  { key: 'have', title: 'WE HAVE YOUR PACKAGE', activeIcon: 'pin' },
+  { key: 'way', title: 'ON THE WAY', activeIcon: 'arrow' },
+  { key: 'ofd', title: 'OUT FOR DELIVERY', activeIcon: 'arrow' },
+  { key: 'to', title: 'TO', activeIcon: 'check' },
+] as const;
+
+function milestoneIndex(status: string) {
+  const s = status.toLowerCase();
+  if (s.includes('deliver') && !s.includes('out')) return 4;
+  if (s.includes('out for')) return 3;
+  if (s.includes('on the way') || s.includes('in transit') || s.includes('depart') || s.includes('arriv') || s.includes('facility')) return 2;
+  if (s.includes('pick') || s.includes('we have') || s.includes('package')) return 1;
+  if (s.includes('label') || s.includes('created') || s.includes('shipped')) return 0;
+  if (s.includes('hold') || s.includes('exception')) return 2;
+  return 2;
+}
+
+function findEvent(history: TrackingEvent[], ...keys: string[]) {
+  return history.find((h) => keys.some((k) => h.status.toLowerCase().includes(k)));
+}
+
+function formatWhen(ev?: TrackingEvent) {
+  if (!ev) return '';
+  if (ev.date && ev.time) return `${ev.date} ${ev.time}`;
+  return ev.date || ev.time || '';
+}
 
 export default function TrackingPage() {
   const [params] = useSearchParams();
   const [trackingNumber, setTrackingNumber] = useState(params.get('number') || '');
   const [isTracking, setIsTracking] = useState(false);
-  const [trackingResult, setTrackingResult] = useState<{
-    number: string;
-    status: string;
-    estimatedDelivery: string;
-    origin?: string;
-    destination?: string;
-    service?: string;
-    location?: string;
-    history: TrackingEvent[];
-  } | null>(null);
+  const [result, setResult] = useState<TrackResult | null>(null);
   const [setupImage, setSetupImage] = useState<string | null>(null);
   const [deliveredImage, setDeliveredImage] = useState<string | null>(null);
+  const [showHistory, setShowHistory] = useState(false);
+  const [starred, setStarred] = useState(false);
 
   const loadImages = async (number: string, status: string) => {
     setSetupImage(null);
@@ -91,7 +87,7 @@ export default function TrackingPage() {
     } catch {
       /* optional */
     }
-    if (/deliver/i.test(status)) {
+    if (/deliver/i.test(status) && !/out for/i.test(status)) {
       try {
         const delivered = await fetch(`/api/images?number=${encodeURIComponent(number)}&event=delivered`);
         if (delivered.ok) {
@@ -111,13 +107,14 @@ export default function TrackingPage() {
       return;
     }
     setIsTracking(true);
-    setTrackingResult(null);
+    setResult(null);
+    setShowHistory(false);
     try {
-      let result: any = null;
+      let next: TrackResult | null = null;
       const trackRes = await fetch(`/api/track?number=${encodeURIComponent(number)}`);
       const trackJson = await trackRes.json().catch(() => ({}));
       if (trackRes.ok && (trackJson.found || trackJson.status)) {
-        result = {
+        next = {
           number: trackJson.number || number,
           status: trackJson.status || 'In transit',
           estimatedDelivery: trackJson.estimatedDelivery || '',
@@ -132,7 +129,7 @@ export default function TrackingPage() {
         const adminJson = await adminRes.json().catch(() => ({}));
         const shipment = adminJson.shipments?.[0];
         if (shipment) {
-          result = {
+          next = {
             number: shipment.number,
             status: shipment.status,
             estimatedDelivery: shipment.estimatedDelivery || '',
@@ -144,12 +141,12 @@ export default function TrackingPage() {
           };
         }
       }
-      if (!result) {
+      if (!next) {
         toast.error('No information found for that tracking number');
         return;
       }
-      setTrackingResult(result);
-      await loadImages(result.number, result.status);
+      setResult(next);
+      await loadImages(next.number, next.status);
     } catch {
       toast.error('Unable to track right now');
     } finally {
@@ -166,209 +163,291 @@ export default function TrackingPage() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [params]);
 
-  const activeStep = useMemo(
-    () => (trackingResult ? stepIndex(trackingResult.status) : 0),
-    [trackingResult]
-  );
-  const isHeld = !!trackingResult && /hold/i.test(trackingResult.status);
+  const active = useMemo(() => (result ? milestoneIndex(result.status) : 0), [result]);
+  const delivered = !!result && /deliver/i.test(result.status) && !/out for/i.test(result.status);
+  const railColor = delivered ? 'bg-[#00843D]' : 'bg-[#4D148C]';
+  const activeColor = delivered ? 'bg-[#00843D]' : 'bg-[#4D148C]';
+
+  const milestoneData = useMemo(() => {
+    if (!result) return [];
+    const hist = result.history || [];
+    const label = findEvent(hist, 'label', 'created', 'shipped') || hist[hist.length - 1];
+    const picked = findEvent(hist, 'pick', 'we have', 'package');
+    const transit = findEvent(hist, 'on the way', 'in transit', 'depart', 'arriv', 'facility');
+    const ofd = findEvent(hist, 'out for');
+    const del = findEvent(hist, 'deliver');
+
+    return [
+      {
+        title: 'FROM',
+        place: result.origin || label?.location || '—',
+        sub: 'Label Created',
+        when: formatWhen(label),
+        extra: null as string | null,
+      },
+      {
+        title: 'WE HAVE YOUR PACKAGE',
+        place: (picked?.location || result.location || '').toUpperCase() || '—',
+        sub: '',
+        when: formatWhen(picked),
+        extra: null,
+      },
+      {
+        title: 'ON THE WAY',
+        place: (transit?.location || result.location || '').toUpperCase() || '—',
+        sub: '',
+        when: formatWhen(transit),
+        extra: null,
+      },
+      {
+        title: 'OUT FOR DELIVERY',
+        place: (ofd?.location || '').toUpperCase() || '',
+        sub: '',
+        when: formatWhen(ofd),
+        extra: null,
+      },
+      delivered
+        ? {
+            title: 'DELIVERED',
+            place: (del?.location || result.destination || '').toUpperCase() || '—',
+            sub: 'Delivered',
+            when: formatWhen(del),
+            extra: null,
+          }
+        : {
+            title: 'TO',
+            place: (result.destination || '').toUpperCase() || '—',
+            sub: 'Scheduled Delivery Date',
+            when: result.estimatedDelivery || '',
+            extra: result.estimatedDelivery ? null : null,
+          },
+    ];
+  }, [result, delivered]);
 
   return (
     <div className="min-h-screen bg-white">
-      <section className="bg-fedex-purple py-14 md:py-20">
-        <div className="max-w-4xl mx-auto px-4 text-center">
-          <motion.div initial={{ opacity: 0, y: 20 }} animate={{ opacity: 1, y: 0 }}>
-            <h1 className="text-4xl md:text-5xl font-light text-white mb-4">Track your package</h1>
-            <p className="text-white/80 mb-8">Enter a tracking number from your admin shipment or label.</p>
+      {/* Search entry (when no result yet) */}
+      {!result && (
+        <section className="bg-[#4D148C] py-12 px-4">
+          <div className="max-w-lg mx-auto text-center">
+            <h1 className="text-3xl font-light text-white mb-3">Track your package</h1>
+            <p className="text-white/80 text-sm mb-6">Enter your tracking number</p>
             <form
               onSubmit={(e) => {
                 e.preventDefault();
                 trackNumber(trackingNumber);
               }}
-              className="max-w-2xl mx-auto"
+              className="flex flex-col sm:flex-row gap-3"
             >
-              <div className="flex flex-col sm:flex-row gap-3">
-                <div className="flex-1 relative">
-                  <Barcode className="absolute left-4 top-1/2 -translate-y-1/2 h-5 w-5 text-gray-400" />
-                  <Input
-                    value={trackingNumber}
-                    onChange={(e) => setTrackingNumber(e.target.value)}
-                    placeholder="Enter tracking number"
-                    className="w-full pl-12 py-6 text-lg bg-white"
-                  />
-                </div>
-                <Button type="submit" disabled={isTracking} className="bg-fedex-orange hover:bg-fedex-orange-dark text-white uppercase font-semibold px-8 py-6">
-                  {isTracking ? 'Tracking…' : (<><Search className="mr-2 h-5 w-5" />Track</>)}
-                </Button>
+              <div className="flex-1 relative">
+                <Barcode className="absolute left-3 top-1/2 -translate-y-1/2 h-5 w-5 text-gray-400" />
+                <Input
+                  value={trackingNumber}
+                  onChange={(e) => setTrackingNumber(e.target.value)}
+                  placeholder="Tracking number"
+                  className="pl-10 py-6 bg-white text-base"
+                />
               </div>
+              <Button type="submit" disabled={isTracking} className="bg-[#FF6200] hover:bg-[#e55a00] text-white font-semibold uppercase px-8 py-6">
+                {isTracking ? 'Tracking…' : (<><Search className="mr-2 h-4 w-4" />Track</>)}
+              </Button>
             </form>
-            <div className="mt-6 flex flex-wrap justify-center gap-4 text-sm text-white/70">
-              <Link to="/tracking/scan" className="hover:text-white inline-flex items-center gap-2"><QrCode className="h-4 w-4" />Scan barcode</Link>
-              <span>|</span>
+            <div className="mt-5 flex flex-wrap justify-center gap-3 text-sm text-white/70">
+              <Link to="/tracking/multiple" className="hover:text-white">Track multiple</Link>
+              <span>·</span>
               <Link to="/tracking/reference" className="hover:text-white">Track by reference</Link>
-              <span>|</span>
-              <Link to="/tracking/multiple" className="hover:text-white">Track multiple packages</Link>
+              <span>·</span>
+              <Link to="/tracking/scan" className="hover:text-white">Scan barcode</Link>
             </div>
-          </motion.div>
-        </div>
-      </section>
-
-      {trackingResult && (
-        <section className="py-10 bg-[#f4f4f4]">
-          <div className="max-w-4xl mx-auto px-4">
-            <motion.div initial={{ opacity: 0, y: 16 }} animate={{ opacity: 1, y: 0 }} className="bg-white rounded-lg shadow-lg overflow-hidden">
-              <div className="bg-fedex-purple p-6 text-white">
-                <div className="flex flex-wrap justify-between gap-4">
-                  <div>
-                    <p className="text-white/60 text-xs uppercase tracking-wide">Tracking ID</p>
-                    <div className="flex items-center gap-2">
-                      <p className="text-xl font-semibold">{trackingResult.number}</p>
-                      <button
-                        type="button"
-                        onClick={() => {
-                          navigator.clipboard.writeText(trackingResult.number);
-                          toast.success('Copied');
-                        }}
-                        className="text-white/70 hover:text-white"
-                      >
-                        <Copy className="h-4 w-4" />
-                      </button>
-                    </div>
-                  </div>
-                  <div className="text-right">
-                    <p className="text-white/60 text-xs uppercase tracking-wide">Status</p>
-                    <p className="text-xl font-semibold flex items-center justify-end gap-2">
-                      {/deliver/i.test(trackingResult.status) ? <CheckCircle className="h-5 w-5 text-green-300" /> : <Truck className="h-5 w-5 text-fedex-orange" />}
-                      {trackingResult.status}
-                    </p>
-                  </div>
-                </div>
-                <div className="mt-4 grid sm:grid-cols-3 gap-3 text-sm text-white/80">
-                  <p><span className="text-white/50">From</span><br />{trackingResult.origin || '—'}</p>
-                  <p><span className="text-white/50">To</span><br />{trackingResult.destination || '—'}</p>
-                  <p><span className="text-white/50">Service</span><br />{trackingResult.service || '—'}</p>
-                </div>
-                {trackingResult.estimatedDelivery && (
-                  <p className="mt-4 text-sm text-white/80">Scheduled delivery: {trackingResult.estimatedDelivery}</p>
-                )}
-              </div>
-
-              {isHeld && (
-                <div className="px-6 py-3 bg-amber-50 text-amber-900 text-sm border-b">
-                  This shipment is on hold. You can request a hold or release from{' '}
-                  <Link className="underline" to="/delivery-manager/hold">Delivery Manager</Link>.
-                </div>
-              )}
-
-              <div className="px-6 py-6">
-                <div className="relative flex justify-between">
-                  {STEPS.map((step, index) => {
-                    const done = index <= activeStep;
-                    return (
-                      <div key={step} className="flex-1 flex flex-col items-center z-10">
-                        <div className={`w-8 h-8 rounded-full flex items-center justify-center mb-2 ${
-                          done ? 'bg-fedex-purple text-white' : 'bg-gray-200 text-gray-400'
-                        }`}>
-                          {done ? <CheckCircle className="h-4 w-4" /> : index + 1}
-                        </div>
-                        <span className={`text-xs text-center ${done ? 'text-gray-900' : 'text-gray-400'}`}>{step}</span>
-                      </div>
-                    );
-                  })}
-                  <div className="absolute top-4 left-[12%] right-[12%] h-1 bg-gray-200">
-                    <div className="h-full bg-fedex-purple" style={{ width: `${(activeStep / (STEPS.length - 1)) * 100}%` }} />
-                  </div>
-                </div>
-              </div>
-
-              {(setupImage || deliveredImage) && (
-                <div className="px-6 pb-6 grid sm:grid-cols-2 gap-4">
-                  {setupImage && (
-                    <div>
-                      <p className="text-sm font-medium mb-2">Package photo</p>
-                      <img src={setupImage} alt="Package" className="w-full max-h-56 object-cover rounded-md border" />
-                    </div>
-                  )}
-                  {deliveredImage && (
-                    <div>
-                      <p className="text-sm font-medium mb-2">Proof of delivery</p>
-                      <img src={deliveredImage} alt="Delivered" className="w-full max-h-56 object-cover rounded-md border" />
-                    </div>
-                  )}
-                </div>
-              )}
-
-              <div className="px-6 pb-8">
-                <h3 className="text-lg font-semibold mb-4">Travel history</h3>
-                {trackingResult.history?.length ? (
-                  <div className="space-y-0">
-                    {trackingResult.history.map((event, index) => (
-                      <div key={`${event.status}-${index}`} className="flex gap-4">
-                        <div className="flex flex-col items-center">
-                          <div className="w-3 h-3 rounded-full bg-fedex-purple mt-1.5" />
-                          {index < trackingResult.history.length - 1 && <div className="w-px flex-1 bg-gray-200" />}
-                        </div>
-                        <div className="pb-5">
-                          <p className="font-semibold text-gray-900">{event.status}</p>
-                          <p className="text-sm text-gray-600">{event.location}</p>
-                          <p className="text-xs text-gray-400">{event.date}{event.time ? ` · ${event.time}` : ''}</p>
-                          {event.details && <p className="text-xs text-gray-500 mt-1">{event.details}</p>}
-                        </div>
-                      </div>
-                    ))}
-                  </div>
-                ) : (
-                  <p className="text-sm text-gray-500">No scan events yet. Status is {trackingResult.status}{trackingResult.location ? ` at ${trackingResult.location}` : ''}.</p>
-                )}
-              </div>
-
-              <div className="px-6 py-4 border-t bg-gray-50 flex flex-wrap gap-3">
-                <Button asChild variant="outline"><Link to="/delivery-manager/hold">Hold at location</Link></Button>
-                <Button asChild variant="outline"><Link to="/delivery-manager/instructions">Delivery instructions</Link></Button>
-                <Button asChild variant="outline"><Link to="/support">Get help</Link></Button>
-              </div>
-            </motion.div>
           </div>
         </section>
       )}
 
-      <section className="py-16">
-        <div className="max-w-7xl mx-auto px-4">
-          <FadeInOnScroll>
-            <h2 className="text-3xl font-light text-center mb-10">Stay informed every step of the way</h2>
-          </FadeInOnScroll>
-          <div className="grid md:grid-cols-2 lg:grid-cols-4 gap-6">
-            {trackingFeatures.map((feature, index) => (
-              <FadeInOnScroll key={feature.title} delay={index * 0.08}>
-                <div className="border rounded-lg p-6 text-center hover:border-fedex-purple hover:shadow-md transition-all">
-                  <div className="w-14 h-14 mx-auto mb-4 bg-fedex-purple/10 rounded-full flex items-center justify-center">
-                    <feature.icon className="h-7 w-7 text-fedex-purple" />
-                  </div>
-                  <h3 className="font-semibold mb-2">{feature.title}</h3>
-                  <p className="text-sm text-gray-600">{feature.description}</p>
-                </div>
-              </FadeInOnScroll>
-            ))}
+      {/* FedEx-style result */}
+      {result && (
+        <div className="max-w-lg mx-auto bg-white min-h-screen pb-28 relative">
+          {/* Orange updates bar */}
+          <div className="bg-[#FF6200] text-white text-center text-sm font-semibold tracking-wide py-2.5 uppercase">
+            Get updates
           </div>
-        </div>
-      </section>
 
-      <section className="py-16 bg-[#f4f4f4]">
-        <div className="max-w-7xl mx-auto px-4 grid lg:grid-cols-2 gap-12 items-center">
-          <div>
-            <h2 className="text-3xl font-light mb-4">FedEx Delivery Manager</h2>
-            <p className="text-gray-600 mb-6">Hold, redirect, or add instructions for a delivery tied to your tracking number.</p>
-            <ul className="space-y-2 mb-6 text-gray-600">
-              {['Hold a package at a location', 'Add delivery instructions', 'Get delivery updates', 'Redirect a shipment'].map((item) => (
-                <li key={item} className="flex gap-2"><CheckCircle className="h-5 w-5 text-fedex-purple" />{item}</li>
-              ))}
-            </ul>
-            <Button asChild className="bg-fedex-purple text-white"><Link to="/login">Sign in to manage</Link></Button>
+          <div className="px-5 pt-5">
+            <button type="button" className="text-[#007AB7] text-sm font-semibold tracking-wide mb-6">
+              MORE OPTIONS
+            </button>
+
+            {/* Tracking ID */}
+            <div className="mb-8">
+              <p className="text-xs font-semibold tracking-wide text-gray-800 mb-1">TRACKING ID</p>
+              <div className="flex items-center gap-2">
+                <p className="text-lg text-gray-900 font-medium tracking-wide">{result.number}</p>
+                <button
+                  type="button"
+                  onClick={() => {
+                    setTrackingNumber(result.number);
+                    setResult(null);
+                  }}
+                  className="text-[#007AB7] p-1"
+                  aria-label="Edit tracking number"
+                >
+                  <Pencil className="h-4 w-4" />
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setStarred((s) => !s)}
+                  className={`p-1 ${starred ? 'text-[#FF6200]' : 'text-[#007AB7]'}`}
+                  aria-label="Star shipment"
+                >
+                  <Star className={`h-4 w-4 ${starred ? 'fill-current' : ''}`} />
+                </button>
+              </div>
+            </div>
+
+            {/* Vertical milestone timeline */}
+            <div className="relative pl-2">
+              {milestoneData.map((m, index) => {
+                const isActive = index === active;
+                const isPast = index < active;
+                const isFuture = index > active;
+                const isLast = index === milestoneData.length - 1;
+
+                return (
+                  <div key={m.title} className="relative flex gap-4 pb-8 last:pb-2">
+                    {/* Rail */}
+                    <div className="relative flex flex-col items-center w-10 flex-shrink-0">
+                      {!isLast && (
+                        <div
+                          className={`absolute top-10 bottom-[-2rem] w-[6px] rounded-full ${
+                            isPast || isActive ? railColor : 'bg-gray-200'
+                          }`}
+                          style={{ left: '50%', transform: 'translateX(-50%)' }}
+                        />
+                      )}
+                      {isActive ? (
+                        <div className={`relative z-10 w-10 h-10 rounded-full ${activeColor} flex items-center justify-center shadow-md ring-8 ring-purple-100/80`}>
+                          {delivered && index === 4 ? (
+                            <Check className="h-5 w-5 text-white stroke-[3]" />
+                          ) : index === 0 || index === 1 ? (
+                            <MapPin className="h-5 w-5 text-white" />
+                          ) : (
+                            <ArrowRight className="h-5 w-5 text-white" />
+                          )}
+                        </div>
+                      ) : (
+                        <div
+                          className={`relative z-10 w-3 h-3 mt-3.5 rounded-full ${
+                            isPast ? railColor : 'bg-gray-300'
+                          }`}
+                        />
+                      )}
+                    </div>
+
+                    {/* Content */}
+                    <div
+                      className={`flex-1 min-w-0 ${isActive ? 'bg-gray-100 rounded-2xl px-4 py-3 -ml-1' : 'pt-1'}`}
+                    >
+                      <p
+                        className={`text-sm font-bold tracking-wide ${
+                          isFuture ? 'text-gray-400' : 'text-gray-900'
+                        }`}
+                      >
+                        {m.title}
+                      </p>
+                      {m.place && (
+                        <p className={`text-sm mt-0.5 ${isFuture ? 'text-gray-400' : 'text-gray-800'}`}>
+                          {m.place}
+                        </p>
+                      )}
+                      {m.sub && (
+                        <p className={`text-sm italic mt-1 ${isFuture ? 'text-gray-400' : 'text-gray-600'}`}>
+                          {m.sub}
+                        </p>
+                      )}
+                      {m.when && (
+                        <p className={`text-sm mt-0.5 ${isFuture ? 'text-gray-400' : 'text-gray-700'}`}>
+                          {m.when}
+                        </p>
+                      )}
+                      {isActive && index === 0 && (
+                        <button type="button" className="text-sm text-gray-900 underline mt-2">
+                          View more details
+                        </button>
+                      )}
+                      {isActive && index === 4 && !delivered && result.estimatedDelivery && (
+                        <p className="text-sm text-gray-700 mt-1">By end of day</p>
+                      )}
+                    </div>
+                  </div>
+                );
+              })}
+            </div>
+
+            {/* Photos optional */}
+            {(setupImage || deliveredImage) && (
+              <div className="mt-2 mb-6 grid gap-3">
+                {setupImage && (
+                  <div>
+                    <p className="text-xs font-semibold text-gray-500 mb-1">PACKAGE PHOTO</p>
+                    <img src={setupImage} alt="Package" className="w-full max-h-48 object-cover rounded-lg border" />
+                  </div>
+                )}
+                {deliveredImage && (
+                  <div>
+                    <p className="text-xs font-semibold text-gray-500 mb-1">PROOF OF DELIVERY</p>
+                    <img src={deliveredImage} alt="Delivered" className="w-full max-h-48 object-cover rounded-lg border" />
+                  </div>
+                )}
+              </div>
+            )}
+
+            {/* View travel history */}
+            <button
+              type="button"
+              onClick={() => setShowHistory((v) => !v)}
+              className="flex items-center gap-1 text-[#007AB7] text-sm font-medium mb-6"
+            >
+              <ChevronDown className={`h-4 w-4 transition-transform ${showHistory ? 'rotate-180' : ''}`} />
+              View travel history
+            </button>
+
+            {showHistory && (
+              <div className="mb-8 border-t pt-4 space-y-4">
+                {(result.history || []).length === 0 && (
+                  <p className="text-sm text-gray-500">No detailed scans yet for this number.</p>
+                )}
+                {(result.history || []).map((ev, i) => (
+                  <div key={`${ev.status}-${i}`} className="text-sm">
+                    <p className="font-semibold text-gray-900">{ev.status}</p>
+                    <p className="text-gray-600">{ev.location}</p>
+                    <p className="text-gray-400 text-xs">{ev.date}{ev.time ? ` · ${ev.time}` : ''}</p>
+                    {ev.details && <p className="text-gray-500 text-xs mt-0.5">{ev.details}</p>}
+                  </div>
+                ))}
+              </div>
+            )}
+
+            <button
+              type="button"
+              onClick={() => {
+                setResult(null);
+                setTrackingNumber('');
+              }}
+              className="text-sm text-[#007AB7] underline"
+            >
+              Track another package
+            </button>
           </div>
-          <div className="flex items-center justify-center h-56 bg-white border rounded-lg">
-            <Package className="h-16 w-16 text-fedex-purple" />
-          </div>
+
+          {/* Ask FedEx FAB */}
+          <Link
+            to="/support"
+            className="fixed bottom-6 right-5 z-20 flex items-center gap-2 bg-[#4D148C] text-white rounded-full px-5 py-3 shadow-lg font-semibold text-sm"
+          >
+            <MessageCircle className="h-5 w-5" />
+            ASK FEDEX
+          </Link>
         </div>
-      </section>
+      )}
     </div>
   );
 }
