@@ -1,6 +1,18 @@
-import { useEffect, useMemo, useState } from 'react';
+import { useEffect, useMemo, useState, useCallback } from 'react';
 import { Link, useSearchParams } from 'react-router-dom';
-import { Search, ChevronDown, MapPin, Package } from 'lucide-react';
+import {
+  Search,
+  ChevronDown,
+  MapPin,
+  Package,
+  Copy,
+  Check,
+  Share2,
+  RefreshCw,
+  Printer,
+  Headphones,
+  Navigation,
+} from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { toast } from 'sonner';
@@ -53,6 +65,10 @@ function firstEventDate(events: TrackingEvent[]): string {
   return [e.date, e.time].filter(Boolean).join(' ');
 }
 
+function pendingKey(number: string) {
+  return `track_pay_pending_${number}`;
+}
+
 const NOT_FOUND =
   'Sorry, we could not find tracking information for this number. Please check the number and try again, or contact support if you need help.';
 
@@ -68,26 +84,46 @@ async function fetchAllPhotos(number: string): Promise<string[]> {
   }
 }
 
+function mapsUrl(origin: string, destination: string) {
+  const q = encodeURIComponent(`${origin} to ${destination}`);
+  return `https://www.google.com/maps/dir/?api=1&origin=${encodeURIComponent(origin)}&destination=${encodeURIComponent(destination)}&travelmode=driving`;
+}
+
 export default function TrackingPage() {
   const [searchParams, setSearchParams] = useSearchParams();
   const [query, setQuery] = useState(searchParams.get('number') || searchParams.get('trkn') || '');
   const [result, setResult] = useState<TrackResult | null>(null);
   const [loading, setLoading] = useState(false);
+  const [refreshing, setRefreshing] = useState(false);
   const [error, setError] = useState('');
   const [showImages, setShowImages] = useState(true);
   const [showDetails, setShowDetails] = useState(false);
+  const [showScans, setShowScans] = useState(true);
   const [payOpen, setPayOpen] = useState(false);
   const [payName, setPayName] = useState('');
   const [payEmail, setPayEmail] = useState('');
   const [paying, setPaying] = useState(false);
   const [previewIndex, setPreviewIndex] = useState<number | null>(null);
+  const [copied, setCopied] = useState(false);
+  const [paymentPendingLocal, setPaymentPendingLocal] = useState(false);
 
-  async function runTrack(num?: string) {
+  const loadPending = useCallback((number: string) => {
+    try {
+      setPaymentPendingLocal(localStorage.getItem(pendingKey(number)) === '1');
+    } catch {
+      setPaymentPendingLocal(false);
+    }
+  }, []);
+
+  async function runTrack(num?: string, soft = false) {
     const number = (num || query).trim();
     if (!number) return;
-    setLoading(true);
+    if (soft) setRefreshing(true);
+    else {
+      setLoading(true);
+      setResult(null);
+    }
     setError('');
-    setResult(null);
     setShowDetails(false);
     setPayOpen(false);
     setPreviewIndex(null);
@@ -100,6 +136,18 @@ export default function TrackingPage() {
       const shipment = trackJson.shipment || trackJson;
       const rawEvents = trackJson.events || trackJson.history || shipment.events || shipment.history || [];
       const photos = await fetchAllPhotos(number);
+      const paymentRequired = !!(trackJson.paymentRequired ?? shipment.paymentRequired);
+
+      if (!paymentRequired) {
+        try {
+          localStorage.removeItem(pendingKey(number));
+        } catch {
+          /* ok */
+        }
+        setPaymentPendingLocal(false);
+      } else {
+        loadPending(number);
+      }
 
       setResult({
         number: shipment.number || number,
@@ -113,7 +161,7 @@ export default function TrackingPage() {
         packageSize: shipment.packageSize || shipment.package_size || '',
         feePaid: !!(shipment.feePaid ?? shipment.fee_paid),
         collectPayment: !!(shipment.collectPayment ?? shipment.collect_payment),
-        paymentRequired: !!(trackJson.paymentRequired ?? shipment.paymentRequired),
+        paymentRequired,
         paymentInstructions: trackJson.paymentInstructions || shipment.paymentInstructions || '',
         events: (Array.isArray(rawEvents) ? rawEvents : []).map((ev: any) => ({
           date: ev.date || '',
@@ -129,8 +177,10 @@ export default function TrackingPage() {
       setSearchParams({ number });
     } catch (e: any) {
       setError(e.message || NOT_FOUND);
+      if (!soft) setResult(null);
     } finally {
       setLoading(false);
+      setRefreshing(false);
     }
   }
 
@@ -145,8 +195,40 @@ export default function TrackingPage() {
 
   const paymentRequired = !!(result?.paymentRequired);
   const feeLabel = result?.shippingFee != null && result.shippingFee > 0 ? formatFee(result.shippingFee) : '';
-  const stage = result ? stageFromStatus(result.status, paymentRequired) : 0;
+  const stage = result ? stageFromStatus(result.status, paymentRequired && !paymentPendingLocal) : 0;
   const delivered = stage >= 4;
+  const showPendingBanner = paymentRequired && paymentPendingLocal;
+
+  async function copyNumber() {
+    if (!result?.number) return;
+    try {
+      await navigator.clipboard.writeText(result.number);
+      setCopied(true);
+      toast.success('Tracking number copied');
+      setTimeout(() => setCopied(false), 2000);
+    } catch {
+      toast.error('Could not copy');
+    }
+  }
+
+  async function shareLink() {
+    if (!result?.number) return;
+    const url = `${window.location.origin}/tracking?number=${encodeURIComponent(result.number)}`;
+    try {
+      if (navigator.share) {
+        await navigator.share({ title: 'Track package', text: `Tracking ${result.number}`, url });
+      } else {
+        await navigator.clipboard.writeText(url);
+        toast.success('Tracking link copied');
+      }
+    } catch (e: any) {
+      if (e?.name !== 'AbortError') toast.error('Could not share');
+    }
+  }
+
+  function printPage() {
+    window.print();
+  }
 
   async function submitPayment(e: React.FormEvent) {
     e.preventDefault();
@@ -160,8 +242,15 @@ export default function TrackingPage() {
       });
       const json = await res.json().catch(() => ({}));
       if (!res.ok) throw new Error(json.error || 'Payment record failed');
-      toast.success(json.message || 'Payment recorded. Tracking will unlock shortly.');
-      await runTrack(result.number);
+      try {
+        localStorage.setItem(pendingKey(result.number), '1');
+      } catch {
+        /* ok */
+      }
+      setPaymentPendingLocal(true);
+      setPayOpen(false);
+      toast.success(json.message || 'Payment submitted. Awaiting confirmation.');
+      await runTrack(result.number, true);
     } catch (err: any) {
       toast.error(err.message || 'Could not record payment');
     } finally {
@@ -182,10 +271,19 @@ export default function TrackingPage() {
 
   const photos = result?.photos || [];
   const hasAnyImage = photos.length > 0;
+  const scanEvents = result?.events || [];
 
   return (
-    <div className="min-h-screen bg-[#F7F7F8] text-gray-900">
-      {!result && (
+    <div className="min-h-screen bg-[#F7F7F8] text-gray-900 track-print-root">
+      <style>{`
+        @media print {
+          header, footer, .no-print, .live-chat, [class*="LiveChat"] { display: none !important; }
+          .track-print-root { background: white !important; }
+          .print-break { break-inside: avoid; }
+        }
+      `}</style>
+
+      {!result && !loading && (
         <section className="max-w-lg mx-auto px-4 pt-20 pb-16">
           <div className="bg-white rounded-2xl shadow-sm border border-gray-100 p-6 space-y-4">
             <h1 className="text-xl font-semibold tracking-tight">Track a package</h1>
@@ -201,27 +299,64 @@ export default function TrackingPage() {
                 onChange={(e) => setQuery(e.target.value)}
                 placeholder="Tracking number"
                 className="flex-1 h-11"
+                aria-label="Tracking number"
               />
-              <Button type="submit" disabled={loading} className="h-11 bg-[#FF6200] hover:bg-[#e55a00] text-white px-4">
+              <Button type="submit" disabled={loading} className="h-11 bg-[#FF6200] hover:bg-[#e55a00] text-white px-4" aria-label="Search">
                 {loading ? '…' : <Search className="h-4 w-4" />}
               </Button>
             </form>
-            {error && <p className="text-sm text-red-600 leading-relaxed">{error}</p>}
+            {error && (
+              <div className="space-y-2">
+                <p className="text-sm text-red-600 leading-relaxed">{error}</p>
+                <Link to="/support" className="text-sm text-[#4D148C] font-medium underline underline-offset-2">
+                  Contact support
+                </Link>
+              </div>
+            )}
           </div>
         </section>
       )}
 
+      {loading && !result && (
+        <div className="max-w-lg mx-auto px-4 pt-16 pb-28 animate-pulse space-y-4" aria-busy="true" aria-label="Loading tracking">
+          <div className="bg-white rounded-2xl border border-gray-100 p-5 space-y-3">
+            <div className="h-3 w-16 bg-gray-200 rounded" />
+            <div className="h-7 w-48 bg-gray-200 rounded" />
+            <div className="h-4 w-36 bg-gray-100 rounded" />
+          </div>
+          <div className="bg-white rounded-2xl border border-gray-100 p-5 space-y-4">
+            <div className="h-3 w-28 bg-gray-200 rounded" />
+            <div className="h-20 bg-gray-100 rounded-xl" />
+            <div className="h-4 w-40 bg-gray-100 rounded" />
+            <div className="h-4 w-32 bg-gray-100 rounded" />
+            <div className="h-4 w-36 bg-gray-100 rounded" />
+          </div>
+        </div>
+      )}
+
       {result && (
         <div className="max-w-lg mx-auto min-h-screen pb-28">
-          <div className="bg-white border-b border-gray-100 px-5 pt-5 pb-4">
+          {/* Sticky status header */}
+          <div className="sticky top-16 md:top-[6.5rem] z-20 bg-white/95 backdrop-blur border-b border-gray-100 px-5 pt-4 pb-3 print-break">
             <div className="flex items-start gap-3">
               <div className="mt-0.5 flex h-11 w-11 shrink-0 items-center justify-center rounded-full bg-[#4D148C]/10">
-                <Package className="h-5 w-5 text-[#4D148C]" strokeWidth={2} />
+                <Package className="h-5 w-5 text-[#4D148C]" strokeWidth={2} aria-hidden />
               </div>
               <div className="min-w-0 flex-1">
                 <p className="text-[11px] font-semibold uppercase tracking-wider text-gray-500">Status</p>
                 <p className="text-xl font-bold text-gray-900 leading-tight mt-0.5">{result.status || 'Label created'}</p>
-                <p className="mt-1.5 font-mono text-[13px] text-gray-500 tracking-wide">{result.number}</p>
+                <div className="mt-1.5 flex flex-wrap items-center gap-2">
+                  <p className="font-mono text-[13px] text-gray-500 tracking-wide">{result.number}</p>
+                  <button
+                    type="button"
+                    onClick={copyNumber}
+                    className="no-print inline-flex items-center gap-1 text-xs font-medium text-[#4D148C] hover:underline"
+                    aria-label="Copy tracking number"
+                  >
+                    {copied ? <Check className="h-3.5 w-3.5" /> : <Copy className="h-3.5 w-3.5" />}
+                    {copied ? 'Copied' : 'Copy'}
+                  </button>
+                </div>
                 {result.service && (
                   <p className="mt-1 text-xs text-gray-500">
                     {result.service}{result.packageSize ? ` · ${result.packageSize}` : ''}
@@ -229,14 +364,47 @@ export default function TrackingPage() {
                 )}
               </div>
             </div>
+            <div className="no-print mt-3 flex flex-wrap gap-2">
+              <Button type="button" variant="outline" size="sm" className="h-8 text-xs" onClick={() => runTrack(result.number, true)} disabled={refreshing}>
+                <RefreshCw className={`h-3.5 w-3.5 mr-1 ${refreshing ? 'animate-spin' : ''}`} />
+                {refreshing ? 'Refreshing…' : 'Refresh'}
+              </Button>
+              <Button type="button" variant="outline" size="sm" className="h-8 text-xs" onClick={shareLink}>
+                <Share2 className="h-3.5 w-3.5 mr-1" />
+                Share
+              </Button>
+              <Button type="button" variant="outline" size="sm" className="h-8 text-xs" onClick={printPage}>
+                <Printer className="h-3.5 w-3.5 mr-1" />
+                Print
+              </Button>
+              <Button type="button" variant="outline" size="sm" className="h-8 text-xs" asChild>
+                <Link to="/support">
+                  <Headphones className="h-3.5 w-3.5 mr-1" />
+                  Support
+                </Link>
+              </Button>
+            </div>
           </div>
 
-          {paymentRequired && feeLabel && (
-            <div className="mx-4 mt-3 rounded-xl border border-amber-200/80 bg-white shadow-sm overflow-hidden">
+          {/* Payment pending after offline submit */}
+          {showPendingBanner && feeLabel && (
+            <div className="mx-4 mt-3 rounded-xl border border-blue-200 bg-blue-50 px-4 py-3 text-sm print-break">
+              <p className="font-semibold text-blue-900">Payment confirmation pending</p>
+              <p className="text-blue-800 text-xs mt-1 leading-relaxed">
+                We received your offline payment notice for {feeLabel}. Tracking will advance after our team confirms payment.
+                This usually takes a short time — use Refresh to check for updates.
+              </p>
+            </div>
+          )}
+
+          {/* Fee due */}
+          {paymentRequired && feeLabel && !showPendingBanner && (
+            <div className="mx-4 mt-3 rounded-xl border border-amber-200/80 bg-white shadow-sm overflow-hidden print-break no-print">
               <button
                 type="button"
                 onClick={() => setPayOpen((v) => !v)}
                 className="w-full flex items-center gap-3 px-4 py-3 text-left"
+                aria-expanded={payOpen}
               >
                 <span className="flex h-8 w-8 shrink-0 items-center justify-center rounded-full bg-amber-100 text-amber-800 text-sm font-bold">$</span>
                 <div className="min-w-0 flex-1">
@@ -259,18 +427,63 @@ export default function TrackingPage() {
                       {paying ? 'Recording…' : `Confirm offline payment · ${feeLabel}`}
                     </Button>
                   </form>
+                  <Link to="/support" className="block text-center text-xs text-[#4D148C] font-medium underline">
+                    Need help with payment? Contact support
+                  </Link>
                 </div>
               )}
             </div>
           )}
 
           {!paymentRequired && feeLabel && (
-            <div className="mx-4 mt-3 rounded-lg border border-green-200 bg-green-50/80 px-4 py-2.5 flex items-center gap-2">
+            <div className="mx-4 mt-3 rounded-lg border border-green-200 bg-green-50/80 px-4 py-2.5 flex items-center gap-2 print-break">
               <span className="text-green-700 text-sm font-medium">Shipping charge {feeLabel} · Paid</span>
             </div>
           )}
 
-          <div className="mx-4 mt-4 mb-6 rounded-2xl bg-white border border-gray-100 shadow-sm px-5 py-6">
+          {/* Estimated delivery — always when present */}
+          {result.estimatedDelivery && (
+            <div className="mx-4 mt-3 rounded-lg border border-gray-100 bg-white px-4 py-2.5 text-sm print-break">
+              <span className="text-gray-500">Scheduled delivery: </span>
+              <span className="font-semibold text-gray-900">{result.estimatedDelivery}</span>
+              {paymentRequired && (
+                <span className="block text-xs text-gray-500 mt-0.5">May update after shipping fee is confirmed.</span>
+              )}
+            </div>
+          )}
+
+          {/* Route / map card */}
+          {(result.origin || result.destination) && (
+            <div className="mx-4 mt-3 rounded-xl border border-gray-100 bg-white px-4 py-3 print-break">
+              <div className="flex items-start gap-2">
+                <Navigation className="h-4 w-4 text-[#4D148C] mt-0.5 shrink-0" aria-hidden />
+                <div className="min-w-0 flex-1 text-sm">
+                  <p className="font-medium text-gray-900">Route</p>
+                  <p className="text-gray-600 mt-1 leading-snug">
+                    <span className="text-gray-500">From </span>{result.origin || '—'}
+                  </p>
+                  <p className="text-gray-600 mt-0.5 leading-snug">
+                    <span className="text-gray-500">To </span>{result.destination || '—'}
+                  </p>
+                  {result.currentLocation && (
+                    <p className="text-xs text-gray-500 mt-1.5">Last location: {result.currentLocation}</p>
+                  )}
+                  {result.origin && result.destination && (
+                    <a
+                      href={mapsUrl(result.origin, result.destination)}
+                      target="_blank"
+                      rel="noopener noreferrer"
+                      className="no-print inline-block mt-2 text-xs font-medium text-[#4D148C] underline underline-offset-2"
+                    >
+                      Open in Maps
+                    </a>
+                  )}
+                </div>
+              </div>
+            </div>
+          )}
+
+          <div className="mx-4 mt-4 mb-6 rounded-2xl bg-white border border-gray-100 shadow-sm px-5 py-6 print-break">
             <p className="text-[11px] font-bold uppercase tracking-wider text-gray-400 mb-5">Shipment progress</p>
 
             <div className="relative pl-12">
@@ -280,15 +493,17 @@ export default function TrackingPage() {
                 <div className="absolute -left-12 top-0 flex h-9 w-9 items-center justify-center">
                   <span className="absolute h-9 w-9 rounded-full bg-[#4D148C]/15" />
                   <span className="relative flex h-8 w-8 items-center justify-center rounded-full bg-[#4D148C] shadow-sm">
-                    <MapPin className="h-4 w-4 text-white" strokeWidth={2.25} />
+                    <MapPin className="h-4 w-4 text-white" strokeWidth={2.25} aria-hidden />
                   </span>
                 </div>
                 <p className="text-[11px] font-bold uppercase tracking-wider text-[#4D148C]">From</p>
                 <p className="text-base font-semibold text-gray-900 leading-snug mt-1">{result.origin || '—'}</p>
                 <p className="mt-2 text-sm font-medium text-gray-800">Label Created</p>
                 {labelDate && <p className="text-sm text-gray-500 mt-0.5">{labelDate}</p>}
-                {paymentRequired && feeLabel ? (
+                {paymentRequired && feeLabel && !showPendingBanner ? (
                   <p className="mt-2 text-sm text-amber-700">Awaiting shipping fee ({feeLabel})</p>
+                ) : showPendingBanner ? (
+                  <p className="mt-2 text-sm text-blue-700">Payment pending confirmation</p>
                 ) : (
                   <button
                     type="button"
@@ -341,12 +556,43 @@ export default function TrackingPage() {
               </div>
             </div>
 
+            {/* Scan history */}
+            {scanEvents.length > 0 && (
+              <div className="mt-8 pt-5 border-t border-gray-100">
+                <button
+                  type="button"
+                  className="flex items-center gap-2 text-sm font-medium text-gray-700"
+                  onClick={() => setShowScans((v) => !v)}
+                  aria-expanded={showScans}
+                >
+                  <ChevronDown className={`h-4 w-4 transition-transform ${showScans ? 'rotate-180' : ''}`} />
+                  <span>{showScans ? 'Hide scan history' : `Show scan history (${scanEvents.length})`}</span>
+                </button>
+                {showScans && (
+                  <ul className="mt-3 space-y-3" aria-label="Scan history">
+                    {[...scanEvents].reverse().map((ev, i) => (
+                      <li key={i} className="rounded-lg bg-gray-50 px-3 py-2.5 text-sm border border-gray-100">
+                        <p className="font-medium text-gray-900">{ev.status || 'Update'}</p>
+                        {(ev.date || ev.time) && (
+                          <p className="text-xs text-gray-500 mt-0.5">{[ev.date, ev.time].filter(Boolean).join(' · ')}</p>
+                        )}
+                        {ev.location && <p className="text-xs text-gray-600 mt-0.5">{ev.location}</p>}
+                        {ev.detail && <p className="text-xs text-gray-500 mt-1">{ev.detail}</p>}
+                      </li>
+                    ))}
+                  </ul>
+                )}
+              </div>
+            )}
+
+            {/* Photos */}
             {hasAnyImage && (
               <div className="mt-8 pt-5 border-t border-gray-100">
                 <button
                   type="button"
                   className="flex items-center gap-2 text-sm font-medium text-gray-700"
                   onClick={() => setShowImages((v) => !v)}
+                  aria-expanded={showImages}
                 >
                   <ChevronDown className={`h-4 w-4 transition-transform ${showImages ? 'rotate-180' : ''}`} />
                   <span>
@@ -361,12 +607,9 @@ export default function TrackingPage() {
                         type="button"
                         className="text-left rounded-xl overflow-hidden border border-gray-100 focus:outline-none focus:ring-2 focus:ring-[#4D148C]/40"
                         onClick={() => setPreviewIndex(i)}
+                        aria-label={`Enlarge package photo ${i + 1}`}
                       >
-                        <img
-                          src={src}
-                          alt={`Package ${i + 1}`}
-                          className="w-full h-28 object-cover"
-                        />
+                        <img src={src} alt={`Package ${i + 1}`} className="w-full h-28 object-cover" />
                         <p className="text-[11px] text-gray-500 px-2 py-1 bg-gray-50">Photo {i + 1} · Tap to enlarge</p>
                       </button>
                     ))}
@@ -374,16 +617,9 @@ export default function TrackingPage() {
                 )}
               </div>
             )}
-
-            {result.estimatedDelivery && !paymentRequired && (
-              <p className="mt-6 text-sm text-gray-500">
-                Scheduled delivery:{' '}
-                <span className="font-semibold text-gray-900">{result.estimatedDelivery}</span>
-              </p>
-            )}
           </div>
 
-          <div className="fixed bottom-0 left-0 right-0 max-w-lg mx-auto bg-white/95 backdrop-blur border-t border-gray-100 px-4 py-3 flex gap-2">
+          <div className="no-print fixed bottom-0 left-0 right-0 max-w-lg mx-auto bg-white/95 backdrop-blur border-t border-gray-100 px-4 py-3 flex gap-2">
             <Button asChild variant="outline" className="flex-1 h-11">
               <Link to="/">Home</Link>
             </Button>
@@ -393,6 +629,8 @@ export default function TrackingPage() {
               onClick={() => {
                 setResult(null);
                 setQuery('');
+                setError('');
+                setPaymentPendingLocal(false);
                 setSearchParams({});
               }}
             >
