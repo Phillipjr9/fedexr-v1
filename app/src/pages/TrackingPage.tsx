@@ -35,7 +35,6 @@ interface TrackResult {
   history: TrackingEvent[];
 }
 
-/** Never show internal wording on the public tracking page */
 function publicDetails(status: string, details?: string) {
   const raw = String(details || '').trim();
   if (raw && !/admin/i.test(raw)) return raw;
@@ -49,72 +48,68 @@ function publicDetails(status: string, details?: string) {
   return '';
 }
 
-/**
- * FedEx-style place label: "Avenel, NJ US" — never a full street address.
- */
-function shortPlace(raw?: string | null, uppercase = false): string {
-  if (!raw) return '';
+/** Parse city + state from any address-like string (no street). */
+function cityState(raw?: string | null): { city: string; state: string } {
+  if (!raw) return { city: '', state: '' };
   let s = String(raw).replace(/\s+/g, ' ').trim();
-  if (!s) return '';
+  if (!s) return { city: '', state: '' };
 
-  // Drop leading street numbers / unit lines when comma-separated
-  const parts = s.split(',').map((p) => p.trim()).filter(Boolean);
+  let parts = s.split(',').map((p) => p.trim()).filter(Boolean);
   if (parts.length >= 2) {
-    // If first segment looks like a street (starts with digits), drop it
-    if (/^\d/.test(parts[0]) || /\b(st|street|ave|avenue|rd|road|blvd|dr|drive|ln|lane|ct|court|way|hwy)\b/i.test(parts[0])) {
+    if (/^\d/.test(parts[0]) || /\b(st|street|ave|avenue|rd|road|blvd|dr|drive|ln|lane|ct|court|way|hwy|suite|apt)\b/i.test(parts[0])) {
       parts.shift();
     }
   }
 
-  // Prefer last 2–3 geographic chunks: City, ST [Country]
-  let chunks = parts.length ? parts : [s];
-  if (chunks.length > 3) chunks = chunks.slice(-3);
-  if (chunks.length === 1) {
-    // "City ST 12345" or "City ST US"
-    const m = chunks[0].match(/^(.+?)\s+([A-Z]{2})(?:\s+(\d{5}(-\d{4})?|[A-Z]{2,3}))?$/i);
-    if (m) {
-      const city = m[1].replace(/\s+\d{5}(-\d{4})?$/, '').trim();
-      const st = m[2].toUpperCase();
-      const tail = m[3] && !/^\d/.test(m[3]) ? m[3].toUpperCase() : 'US';
-      s = `${city}, ${st} ${tail}`;
-    }
-  } else {
-    // Clean zip from last chunks
-    chunks = chunks.map((c, i) => {
-      if (i === chunks.length - 1) return c.replace(/\b\d{5}(-\d{4})?\b/g, '').trim();
-      return c.replace(/\b\d{5}(-\d{4})?\b/g, '').trim();
-    }).filter(Boolean);
-    if (chunks.length >= 2) {
-      const last = chunks[chunks.length - 1];
-      const prev = chunks[chunks.length - 2];
-      // "NJ" + "United States" → "NJ US"
-      if (/united states|usa/i.test(last)) {
-        s = `${chunks.slice(0, -1).join(', ')} US`.replace(/,\s*([A-Z]{2})\s+US$/i, ', $1 US');
-        // if prev is state code already handled
-        if (/^[A-Z]{2}$/i.test(prev)) s = `${chunks.slice(0, -2).concat(prev.toUpperCase()).join(', ')} US`;
-      } else if (/^[A-Z]{2}$/i.test(last)) {
-        s = `${chunks.slice(0, -1).join(', ')}, ${last.toUpperCase()} US`;
-      } else {
-        s = chunks.join(', ');
-        if (!/\b(US|USA|United States|[A-Z]{2})\s*$/i.test(s)) s = `${s} US`;
-      }
-    } else {
-      s = chunks[0] || s;
-    }
+  // Strip zips and country words
+  parts = parts
+    .map((p) => p.replace(/\b\d{5}(-\d{4})?\b/g, '').replace(/\b(united states|usa|u\.s\.)\b/gi, '').trim())
+    .filter(Boolean);
+
+  if (parts.length >= 2) {
+    const last = parts[parts.length - 1];
+    const stMatch = last.match(/\b([A-Za-z]{2})\b/);
+    const state = (stMatch ? stMatch[1] : last).toUpperCase().slice(0, 2);
+    const city = parts.slice(0, -1).join(' ');
+    return { city, state };
   }
 
-  s = s.replace(/,\s*,/g, ',').replace(/\s+/g, ' ').trim();
-  return uppercase ? s.toUpperCase() : s;
+  const m = s.match(/^(.+?)\s+([A-Za-z]{2})(?:\s|$)/);
+  if (m) return { city: m[1].replace(/\d/g, '').trim(), state: m[2].toUpperCase() };
+  return { city: s, state: '' };
+}
+
+/** FedEx FROM: "Mccordsville, IN US" */
+function placeFrom(raw?: string | null) {
+  const { city, state } = cityState(raw);
+  if (!city && !state) return '';
+  if (city && state) return `${city}, ${state} US`;
+  return city || state;
+}
+
+/** FedEx hub / on the way: "CHAMPAIGN, IL" */
+function placeHub(raw?: string | null) {
+  const { city, state } = cityState(raw);
+  if (!city && !state) return '';
+  if (city && state) return `${city}, ${state}`.toUpperCase();
+  return (city || state).toUpperCase();
+}
+
+/** FedEx TO: "FLORISSANT, MO US" */
+function placeTo(raw?: string | null) {
+  const { city, state } = cityState(raw);
+  if (!city && !state) return '';
+  if (city && state) return `${city}, ${state} US`.toUpperCase();
+  return (city || state).toUpperCase();
 }
 
 function milestoneIndex(status: string) {
   const s = status.toLowerCase();
   if (s.includes('deliver') && !s.includes('out')) return 4;
   if (s.includes('out for')) return 3;
-  if (s.includes('on the way') || s.includes('in transit') || s.includes('depart') || s.includes('arriv') || s.includes('facility')) return 2;
-  if (s.includes('pick') || s.includes('we have') || s.includes('package')) return 1;
+  if (s.includes('on the way') || s.includes('in transit') || s.includes('depart') || s.includes('arriv') || s.includes('facility') || s.includes('held') || s.includes('hold') || s.includes('exception')) return 2;
+  if (s.includes('pick') || s.includes('we have')) return 1;
   if (s.includes('label') || s.includes('created') || s.includes('shipped')) return 0;
-  if (s.includes('hold') || s.includes('exception')) return 2;
   return 2;
 }
 
@@ -229,59 +224,66 @@ export default function TrackingPage() {
 
   const active = useMemo(() => (result ? milestoneIndex(result.status) : 0), [result]);
   const delivered = !!result && /deliver/i.test(result.status) && !/out for/i.test(result.status);
-  const railColor = delivered ? 'bg-[#00843D]' : 'bg-[#4D148C]';
-  const activeColor = delivered ? 'bg-[#00843D]' : 'bg-[#4D148C]';
+  const brand = delivered ? '#00843D' : '#4D148C';
 
   const milestoneData = useMemo(() => {
     if (!result) return [];
     const hist = result.history || [];
     const label = findEvent(hist, 'label', 'created', 'shipped') || hist[hist.length - 1];
-    const picked = findEvent(hist, 'pick', 'we have', 'package');
+    const picked = findEvent(hist, 'pick', 'we have');
     const transit = findEvent(hist, 'on the way', 'in transit', 'depart', 'arriv', 'facility');
     const ofd = findEvent(hist, 'out for');
     const del = findEvent(hist, 'deliver');
 
-    // FROM / Label Created — title case city, not street (matches real FedEx app)
-    const fromPlace = shortPlace(result.origin || label?.location || '', false);
-    const toPlace = shortPlace(result.destination || '', true);
+    const hubPlace =
+      placeHub(transit?.location) ||
+      placeHub(picked?.location) ||
+      placeHub(result.location) ||
+      '';
 
     return [
       {
         title: 'FROM',
-        place: fromPlace || '—',
+        place: placeFrom(result.origin || label?.location) || '',
         sub: 'Label Created',
         when: formatWhen(label),
+        extra: '' as string,
       },
       {
         title: 'WE HAVE YOUR PACKAGE',
-        place: shortPlace(picked?.location || result.location || '', true) || '',
+        place: placeHub(picked?.location) || hubPlace,
         sub: '',
         when: formatWhen(picked),
+        extra: '',
       },
       {
         title: 'ON THE WAY',
-        place: shortPlace(transit?.location || result.location || '', true) || '',
+        place: hubPlace,
         sub: '',
-        when: formatWhen(transit),
+        when: formatWhen(transit) || formatWhen(picked),
+        extra: '',
       },
       {
         title: 'OUT FOR DELIVERY',
-        place: shortPlace(ofd?.location || '', true) || '',
+        place: placeHub(ofd?.location) || '',
         sub: '',
         when: formatWhen(ofd),
+        extra: '',
       },
       delivered
         ? {
             title: 'DELIVERED',
-            place: shortPlace(del?.location || result.destination || '', true) || '—',
+            place: placeTo(del?.location || result.destination) || '',
             sub: 'Delivered',
             when: formatWhen(del),
+            extra: '',
           }
         : {
             title: 'TO',
-            place: toPlace || '—',
+            place: placeTo(result.destination) || '',
             sub: 'Scheduled Delivery Date',
             when: result.estimatedDelivery || '',
+            extra: result.estimatedDelivery ? 'By end of day' : '',
           },
     ];
   }, [result, delivered]);
@@ -313,13 +315,6 @@ export default function TrackingPage() {
                 {isTracking ? 'Tracking…' : (<><Search className="mr-2 h-4 w-4" />Track</>)}
               </Button>
             </form>
-            <div className="mt-5 flex flex-wrap justify-center gap-3 text-sm text-white/70">
-              <Link to="/tracking/multiple" className="hover:text-white">Track multiple</Link>
-              <span>·</span>
-              <Link to="/tracking/reference" className="hover:text-white">Track by reference</Link>
-              <span>·</span>
-              <Link to="/tracking/scan" className="hover:text-white">Scan barcode</Link>
-            </div>
           </div>
         </section>
       )}
@@ -361,29 +356,40 @@ export default function TrackingPage() {
               </div>
             </div>
 
-            <div className="relative pl-2">
+            {/* FedEx-style vertical timeline */}
+            <div className="relative">
               {milestoneData.map((m, index) => {
                 const isActive = index === active;
                 const isPast = index < active;
                 const isFuture = index > active;
                 const isLast = index === milestoneData.length - 1;
+                const railDone = isPast || isActive;
 
                 return (
-                  <div key={m.title} className="relative flex gap-4 pb-8 last:pb-2">
-                    <div className="relative flex flex-col items-center w-10 flex-shrink-0">
+                  <div key={m.title} className="relative flex gap-4 pb-7 last:pb-2">
+                    {/* Left rail + node */}
+                    <div className="relative flex flex-col items-center w-11 flex-shrink-0">
                       {!isLast && (
                         <div
-                          className={`absolute top-10 bottom-[-2rem] w-[6px] rounded-full ${
-                            isPast || isActive ? railColor : 'bg-gray-200'
-                          }`}
-                          style={{ left: '50%', transform: 'translateX(-50%)' }}
+                          className="absolute top-11 bottom-[-1.75rem] w-[7px] rounded-full"
+                          style={{
+                            left: '50%',
+                            transform: 'translateX(-50%)',
+                            backgroundColor: railDone ? brand : '#E5E7EB',
+                          }}
                         />
                       )}
                       {isActive ? (
-                        <div className={`relative z-10 w-10 h-10 rounded-full ${activeColor} flex items-center justify-center shadow-md ring-8 ring-purple-100/80`}>
+                        <div
+                          className="relative z-10 w-11 h-11 rounded-full flex items-center justify-center"
+                          style={{
+                            backgroundColor: brand,
+                            boxShadow: `0 0 0 10px ${delivered ? 'rgba(0,132,61,0.12)' : 'rgba(77,20,140,0.12)'}`,
+                          }}
+                        >
                           {delivered && index === 4 ? (
                             <Check className="h-5 w-5 text-white stroke-[3]" />
-                          ) : index === 0 || index === 1 ? (
+                          ) : index <= 1 ? (
                             <MapPin className="h-5 w-5 text-white" />
                           ) : (
                             <ArrowRight className="h-5 w-5 text-white" />
@@ -391,31 +397,52 @@ export default function TrackingPage() {
                         </div>
                       ) : (
                         <div
-                          className={`relative z-10 w-3 h-3 mt-3.5 rounded-full ${
-                            isPast ? railColor : 'bg-gray-300'
-                          }`}
+                          className="relative z-10 w-3.5 h-3.5 mt-4 rounded-full border-2 bg-white"
+                          style={{
+                            borderColor: isPast ? brand : '#D1D5DB',
+                            backgroundColor: isPast ? '#fff' : '#D1D5DB',
+                          }}
                         />
                       )}
                     </div>
 
-                    <div className={`flex-1 min-w-0 ${isActive ? 'bg-gray-100 rounded-2xl px-4 py-3 -ml-1' : 'pt-1'}`}>
-                      <p className={`text-sm font-bold tracking-wide ${isFuture ? 'text-gray-400' : 'text-gray-900'}`}>
+                    {/* Content card */}
+                    <div
+                      className={`flex-1 min-w-0 ${
+                        isActive ? 'bg-[#F3F4F6] rounded-2xl px-4 py-3 -ml-0.5' : 'pt-1.5'
+                      }`}
+                    >
+                      <p
+                        className={`text-[13px] font-bold tracking-wide ${
+                          isFuture ? 'text-gray-400' : 'text-gray-900'
+                        }`}
+                      >
                         {m.title}
                       </p>
-                      {m.place && m.place !== '—' && (
-                        <p className={`text-sm mt-0.5 ${isFuture ? 'text-gray-400' : 'text-gray-800'}`}>{m.place}</p>
+                      {m.place && (
+                        <p className={`text-[15px] mt-0.5 ${isFuture ? 'text-gray-400' : 'text-gray-800'}`}>
+                          {m.place}
+                        </p>
                       )}
                       {m.sub && (
-                        <p className={`text-sm italic mt-1 ${isFuture ? 'text-gray-400' : 'text-gray-600'}`}>{m.sub}</p>
+                        <p className={`text-sm italic mt-1 ${isFuture ? 'text-gray-400' : 'text-gray-600'}`}>
+                          {m.sub}
+                        </p>
                       )}
                       {m.when && (
-                        <p className={`text-sm mt-0.5 ${isFuture ? 'text-gray-400' : 'text-gray-700'}`}>{m.when}</p>
+                        <p className={`text-sm mt-0.5 ${isFuture ? 'text-gray-400' : 'text-gray-700'}`}>
+                          {m.when}
+                        </p>
+                      )}
+                      {m.extra && (
+                        <p className={`text-sm mt-0.5 ${isFuture ? 'text-gray-400' : 'text-gray-600'}`}>
+                          {m.extra}
+                        </p>
                       )}
                       {isActive && index === 0 && (
-                        <button type="button" className="text-sm text-gray-900 underline mt-2">View more details</button>
-                      )}
-                      {isActive && index === 4 && !delivered && result.estimatedDelivery && (
-                        <p className="text-sm text-gray-700 mt-1">By end of day</p>
+                        <button type="button" className="text-sm text-gray-900 underline mt-2">
+                          View more details
+                        </button>
                       )}
                     </div>
                   </div>
@@ -449,7 +476,7 @@ export default function TrackingPage() {
             <button
               type="button"
               onClick={() => setShowHistory((v) => !v)}
-              className="flex items-center gap-1 text-[#007AB7] text-sm font-medium mb-6"
+              className="flex items-center gap-1 text-[#007AB7] text-sm font-medium mb-6 mt-2"
             >
               <ChevronDown className={`h-4 w-4 transition-transform ${showHistory ? 'rotate-180' : ''}`} />
               View travel history
@@ -462,7 +489,7 @@ export default function TrackingPage() {
                 )}
                 {(result.history || []).map((ev, i) => {
                   const details = publicDetails(ev.status, ev.details);
-                  const place = shortPlace(ev.location, false);
+                  const place = placeHub(ev.location) || placeFrom(ev.location);
                   return (
                     <div key={`${ev.status}-${i}`} className="text-sm">
                       <p className="font-semibold text-gray-900">{ev.status}</p>
