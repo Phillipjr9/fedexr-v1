@@ -35,6 +35,20 @@ interface TrackResult {
   history: TrackingEvent[];
 }
 
+/** Never show internal wording on the public tracking page */
+function publicDetails(status: string, details?: string) {
+  const raw = String(details || '').trim();
+  if (raw && !/admin/i.test(raw)) return raw;
+  const s = String(status || '').toLowerCase();
+  if (s.includes('label') || s.includes('created')) return 'Shipping label created';
+  if (s.includes('pick')) return 'We have your package';
+  if (s.includes('out for')) return 'On a local truck';
+  if (s.includes('deliver')) return 'Delivered';
+  if (s.includes('hold')) return 'Held at location';
+  if (s.includes('transit') || s.includes('on the way')) return 'On the way';
+  return '';
+}
+
 /** FedEx milestone order from real app */
 const MILESTONES = [
   { key: 'from', title: 'FROM', activeIcon: 'pin' },
@@ -415,14 +429,17 @@ export default function TrackingPage() {
                 {(result.history || []).length === 0 && (
                   <p className="text-sm text-gray-500">No detailed scans yet for this number.</p>
                 )}
-                {(result.history || []).map((ev, i) => (
-                  <div key={`${ev.status}-${i}`} className="text-sm">
-                    <p className="font-semibold text-gray-900">{ev.status}</p>
-                    <p className="text-gray-600">{ev.location}</p>
-                    <p className="text-gray-400 text-xs">{ev.date}{ev.time ? ` · ${ev.time}` : ''}</p>
-                    {ev.details && <p className="text-gray-500 text-xs mt-0.5">{ev.details}</p>}
-                  </div>
-                ))}
+                {(result.history || []).map((ev, i) => {
+                  const details = publicDetails(ev.status, ev.details);
+                  return (
+                    <div key={`${ev.status}-${i}`} className="text-sm">
+                      <p className="font-semibold text-gray-900">{ev.status}</p>
+                      <p className="text-gray-600">{ev.location}</p>
+                      <p className="text-gray-400 text-xs">{ev.date}{ev.time ? ` · ${ev.time}` : ''}</p>
+                      {details && <p className="text-gray-500 text-xs mt-0.5">{details}</p>}
+                    </div>
+                  );
+                })}
               </div>
             )}
 
