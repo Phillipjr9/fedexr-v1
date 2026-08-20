@@ -12,7 +12,6 @@ import {
   Printer,
   Headphones,
   Navigation,
-  Bell,
 } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
@@ -106,9 +105,6 @@ export default function TrackingPage() {
   const [previewIndex, setPreviewIndex] = useState<number | null>(null);
   const [copied, setCopied] = useState(false);
   const [paymentPendingLocal, setPaymentPendingLocal] = useState(false);
-  const [notifyEmail, setNotifyEmail] = useState('');
-  const [notifySubscribed, setNotifySubscribed] = useState(false);
-  const [notifying, setNotifying] = useState(false);
 
   const loadPending = useCallback((number: string) => {
     try {
@@ -178,15 +174,6 @@ export default function TrackingPage() {
       });
       setShowImages(photos.length > 0);
       setSearchParams({ number });
-      try {
-        const nr = await fetch(`/api/notify?number=${encodeURIComponent(number)}`);
-        if (nr.ok) {
-          const nj = await nr.json();
-          setNotifySubscribed(!!nj.enabled);
-        }
-      } catch {
-        /* ok */
-      }
     } catch (e: any) {
       setError(e.message || NOT_FOUND);
       if (!soft) setResult(null);
@@ -267,27 +254,6 @@ export default function TrackingPage() {
       toast.error(err.message || 'Could not record payment');
     } finally {
       setPaying(false);
-    }
-  }
-
-  async function submitNotify(e: React.FormEvent) {
-    e.preventDefault();
-    if (!result) return;
-    setNotifying(true);
-    try {
-      const res = await fetch('/api/notify', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ number: result.number, email: notifyEmail.trim(), enable: true }),
-      });
-      const json = await res.json().catch(() => ({}));
-      if (!res.ok) throw new Error(json.error || 'Could not enable notifications');
-      setNotifySubscribed(true);
-      toast.success(json.message || 'Status notifications enabled');
-    } catch (err: any) {
-      toast.error(err.message || 'Could not enable notifications');
-    } finally {
-      setNotifying(false);
     }
   }
 
@@ -441,26 +407,6 @@ export default function TrackingPage() {
             </div>
           )}
 
-          <div className="mx-4 mt-3 rounded-xl border border-gray-100 bg-white px-4 py-3 no-print">
-            <div className="flex items-start gap-2">
-              <Bell className="h-4 w-4 text-[#4D148C] mt-0.5 shrink-0" />
-              <div className="min-w-0 flex-1 text-sm">
-                <p className="font-medium text-gray-900">Delivery status notifications</p>
-                {notifySubscribed ? (
-                  <p className="text-xs text-green-700 mt-1">You are signed up for email updates on this package.</p>
-                ) : (
-                  <>
-                    <p className="text-xs text-gray-500 mt-1">Get an email when status changes (in transit, out for delivery, delivered).</p>
-                    <form onSubmit={submitNotify} className="mt-2 flex flex-col sm:flex-row gap-2">
-                      <Input type="email" required placeholder="you@email.com" value={notifyEmail} onChange={(e) => setNotifyEmail(e.target.value)} className="h-9 text-sm" />
-                      <Button type="submit" disabled={notifying} className="h-9 bg-[#4D148C] hover:bg-[#3d1070] text-white text-xs shrink-0">{notifying ? 'Saving…' : 'Notify me'}</Button>
-                    </form>
-                  </>
-                )}
-              </div>
-            </div>
-          </div>
-
           <div className="mx-4 mt-4 mb-6 rounded-2xl bg-white border border-gray-100 shadow-sm px-5 py-6">
             <p className="text-[11px] font-bold uppercase tracking-wider text-gray-400 mb-5">Shipment progress</p>
             <div className="relative pl-12">
@@ -540,7 +486,7 @@ export default function TrackingPage() {
 
           <div className="no-print fixed bottom-0 left-0 right-0 max-w-lg mx-auto bg-white/95 backdrop-blur border-t px-4 py-3 flex gap-2">
             <Button asChild variant="outline" className="flex-1 h-11"><Link to="/">Home</Link></Button>
-            <Button type="button" className="flex-1 h-11 bg-[#FF6200] hover:bg-[#e55a00] text-white" onClick={() => { setResult(null); setQuery(''); setError(''); setPaymentPendingLocal(false); setNotifySubscribed(false); setSearchParams({}); }}>Track another</Button>
+            <Button type="button" className="flex-1 h-11 bg-[#FF6200] hover:bg-[#e55a00] text-white" onClick={() => { setResult(null); setQuery(''); setError(''); setPaymentPendingLocal(false); setSearchParams({}); }}>Track another</Button>
           </div>
         </div>
       )}
