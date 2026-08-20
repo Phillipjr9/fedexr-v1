@@ -123,6 +123,9 @@ export default function AdminShipments() {
     setEditMessage('');
     setGallery([]);
     setPreviewIndex(null);
+    // Clear previous route selection so admin can reload/update stops on edit
+    setRouteStops([]);
+    setSelectedStops({});
     refreshGallery(s.number);
   }
 
@@ -187,7 +190,7 @@ export default function AdminShipments() {
         await apiAddEvent({
           number,
           status: 'In transit',
-          location: stop.name || stop.label || '',
+          location: stop.name || stop.label || stop.short || stop.city || '',
           details: 'Departed facility',
         });
       }
@@ -233,7 +236,27 @@ export default function AdminShipments() {
           details: editMessage.trim() || editStatus,
         });
       }
-      toast.success(del.estimatedDelivery ? `Saved · ${del.estimatedDelivery}` : 'Saved');
+      // Apply selected intermediate route stops to the tracking timeline (same as create)
+      const chosen = routeStops.filter((_, i) => selectedStops[i]);
+      if (chosen.length > 2) {
+        for (const stop of chosen.slice(1, -1)) {
+          const loc = stop.name || stop.label || stop.short || stop.city || stop.display || '';
+          if (!loc.trim()) continue;
+          await apiAddEvent({
+            number: editing,
+            status: 'In transit',
+            location: loc.trim(),
+            details: 'Departed facility',
+          });
+        }
+        toast.success(
+          del.estimatedDelivery
+            ? `Saved · ${del.estimatedDelivery} · ${chosen.length - 2} stop(s) added`
+            : `Saved · ${chosen.length - 2} route stop(s) added`
+        );
+      } else {
+        toast.success(del.estimatedDelivery ? `Saved · ${del.estimatedDelivery}` : 'Saved');
+      }
       await refresh();
     } catch (e: any) {
       toast.error(e.message || 'Save failed');
@@ -404,21 +427,32 @@ export default function AdminShipments() {
 
         <div className="flex flex-wrap gap-2">
           <Button type="button" onClick={loadRouteStops} disabled={loadingRoute} variant="outline">
-            {loadingRoute ? 'Loading route…' : 'Load route stops'}
+            {loadingRoute ? 'Loading route…' : editing ? 'Reload route stops' : 'Load route stops'}
           </Button>
-          <Button type="button" onClick={createShipment} disabled={saving} className="bg-[#FF6200] hover:bg-[#e55a00] text-white">
-            {saving ? 'Saving…' : 'Create label'}
-          </Button>
+          {!editing && (
+            <Button type="button" onClick={createShipment} disabled={saving} className="bg-[#FF6200] hover:bg-[#e55a00] text-white">
+              {saving ? 'Saving…' : 'Create label'}
+            </Button>
+          )}
+          {editing && routeStops.length > 0 && (
+            <p className="text-xs text-gray-500 self-center">
+              Selected intermediate stops will be added when you click Save update below.
+            </p>
+          )}
         </div>
 
         {routeStops.length > 0 && (
           <div className="border rounded-lg p-3 max-h-48 overflow-auto text-sm space-y-1">
-            <p className="text-xs text-gray-500 mb-2">Choose stops that appear in tracking story</p>
+            <p className="text-xs text-gray-500 mb-2">
+              {editing
+                ? 'Choose stops to add to the tracking timeline (Save update applies them)'
+                : 'Choose stops that appear in tracking story'}
+            </p>
             {routeStops.map((stop, i) => (
               <label key={i} className="flex items-center gap-2 cursor-pointer">
                 <input type="checkbox" checked={!!selectedStops[i]} onChange={(e) => setSelectedStops((prev) => ({ ...prev, [i]: e.target.checked }))} />
                 <span className="font-mono text-xs text-gray-400">{i + 1}</span>
-                <span>{stop.name || stop.label || `${stop.lat}, ${stop.lon}`}</span>
+                <span>{stop.name || stop.label || stop.short || stop.city || `${stop.lat}, ${stop.lon}`}</span>
               </label>
             ))}
           </div>
@@ -445,8 +479,9 @@ export default function AdminShipments() {
               </select>
             </div>
             <div>
-              <label className="text-xs text-gray-500">Location</label>
+              <label className="text-xs text-gray-500">Current location (shown on tracking)</label>
               <Input value={editLocation} onChange={(e) => setEditLocation(e.target.value)} placeholder="City, ST" />
+              <p className="text-[11px] text-gray-400 mt-1">This updates the package&apos;s current position customers see on tracking.</p>
             </div>
           </div>
 

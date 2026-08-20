@@ -419,7 +419,7 @@ export default function TrackingPage() {
             </div>
           )}
 
-          {(result.origin || result.destination) && (
+          {(result.origin || result.destination || result.currentLocation) && (
             <div className="mx-4 mt-3 rounded-xl border border-gray-100 bg-white px-4 py-3">
               <div className="flex items-start gap-2">
                 <Navigation className="h-4 w-4 text-[#4D148C] mt-0.5 shrink-0" />
@@ -427,6 +427,12 @@ export default function TrackingPage() {
                   <p className="font-medium text-gray-900">Route</p>
                   <p className="text-gray-600 mt-1">From {result.origin || '—'}</p>
                   <p className="text-gray-600">To {result.destination || '—'}</p>
+                  {result.currentLocation && (
+                    <p className="mt-2 text-sm">
+                      <span className="text-gray-500">Current location: </span>
+                      <span className="font-semibold text-[#4D148C]">{result.currentLocation}</span>
+                    </p>
+                  )}
                   {result.origin && result.destination && (
                     <a href={mapsUrl(result.origin, result.destination)} target="_blank" rel="noopener noreferrer" className="no-print inline-block mt-2 text-xs font-medium text-[#4D148C] underline">Open in Maps</a>
                   )}
@@ -470,7 +476,15 @@ export default function TrackingPage() {
                 {labelDate && <p className="text-sm text-gray-500 mt-0.5">{labelDate}</p>}
               </div>
               <Milestone label="We have your package" active={stage >= 1} done={stage > 1} />
-              <Milestone label="On the way" active={stage >= 2} done={stage > 2} />
+              <Milestone
+                label={
+                  stage >= 2 && result.currentLocation
+                    ? `On the way · ${result.currentLocation}`
+                    : 'On the way'
+                }
+                active={stage >= 2}
+                done={stage > 2}
+              />
               <Milestone label="Out for delivery" active={stage >= 3} done={stage > 3} />
               <div className="relative pt-1">
                 <div className="absolute -left-12 top-1.5 flex h-9 w-9 items-center justify-center">
@@ -493,7 +507,10 @@ export default function TrackingPage() {
                       <li key={i} className="rounded-lg bg-gray-50 px-3 py-2.5 text-sm border border-gray-100">
                         <p className="font-medium">{ev.status || 'Update'}</p>
                         {(ev.date || ev.time) && <p className="text-xs text-gray-500">{[ev.date, ev.time].filter(Boolean).join(' · ')}</p>}
-                        {ev.location && <p className="text-xs text-gray-600">{ev.location}</p>}
+                        {ev.location && <p className="text-xs text-gray-600 font-medium">{ev.location}</p>}
+                        {ev.detail && ev.detail !== ev.status && (
+                          <p className="text-xs text-gray-500 mt-0.5">{ev.detail}</p>
+                        )}
                       </li>
                     ))}
                   </ul>
