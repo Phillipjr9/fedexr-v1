@@ -53,6 +53,7 @@ async function neonLookup(trackingNumber: string) {
         await c.query('ALTER TABLE shipments ADD COLUMN IF NOT EXISTS payment_instructions TEXT');
         await c.query('ALTER TABLE shipments ADD COLUMN IF NOT EXISTS hold_reason TEXT');
         await c.query('ALTER TABLE shipments ADD COLUMN IF NOT EXISTS hold_location TEXT');
+        await c.query('ALTER TABLE shipments ADD COLUMN IF NOT EXISTS deleted_at TIMESTAMPTZ');
       } catch {
         /* ok */
       }
@@ -60,7 +61,7 @@ async function neonLookup(trackingNumber: string) {
         `SELECT tracking_number, status, origin, destination, service, service_id,
                 current_location, estimated_delivery, estimated_delivery_text,
                 shipping_fee, package_size, fee_paid, collect_payment, payment_instructions, hold_reason, hold_location
-         FROM shipments WHERE lower(tracking_number) = lower($1) LIMIT 1`,
+         FROM shipments WHERE lower(tracking_number) = lower($1) AND deleted_at IS NULL LIMIT 1`,
         [trackingNumber]
       );
       if (!ship.rowCount) return null;
