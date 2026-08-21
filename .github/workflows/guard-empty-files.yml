@@ -1,0 +1,33 @@
+name: Guard empty critical files
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Reject empty critical source files
+        run: |
+          set -e
+          for f in \
+            app/src/pages/TrackingPage.tsx \
+            app/src/pages/admin/AdminShipments.tsx \
+            api/admin.ts \
+            api/track.ts \
+            api/images.ts \
+            app/src/lib/adminApi.ts
+          do
+            if [ ! -s "$f" ]; then
+              echo "ERROR: $f is missing or empty"
+              exit 1
+            fi
+            bytes=$(wc -c < "$f")
+            if [ "$bytes" -lt 500 ]; then
+              echo "ERROR: $f is suspiciously small ($bytes bytes)"
+              exit 1
+            fi
+            echo "OK $f ($bytes bytes)"
+          done
